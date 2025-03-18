@@ -25,12 +25,12 @@ st.sidebar.header("User Authentication")
 api_key = st.sidebar.text_input("Binance API Key", type="password")
 api_secret = st.sidebar.text_input("Binance API Secret", type="password")
 
-user = user_collection.find_one({"api_key": api_key, "api_secret": api_secret})
-if user:
-    client = Spot(api_key=api_key, api_secret=api_secret)
-else:
-    st.sidebar.warning("Invalid API credentials. Please enter correct API key and secret.")
-    st.stop()
+user = user_collection.find_one({"api_key": api_key})
+if not user:
+    user_collection.insert_one({"api_key": api_key, "api_secret": api_secret})
+    st.sidebar.success("API credentials saved.")
+
+client = Spot(api_key=api_key, api_secret=api_secret)
 
 # Constants
 SYMBOLS = ["BTCUSDT", "ETHUSDT"]
