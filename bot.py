@@ -25,12 +25,15 @@ st.sidebar.header("User Authentication")
 api_key = st.sidebar.text_input("Binance API Key", type="password")
 api_secret = st.sidebar.text_input("Binance API Secret", type="password")
 
-user = user_collection.find_one({"api_key": api_key})
-if not user:
-    user_collection.insert_one({"api_key": api_key, "api_secret": api_secret})
-    st.sidebar.success("API credentials saved.")
-
-client = Spot(api_key=api_key, api_secret=api_secret)
+client = None
+if api_key and api_secret:
+    user = user_collection.find_one({"api_key": api_key})
+    if not user:
+        user_collection.insert_one({"api_key": api_key, "api_secret": api_secret})
+        st.sidebar.success("API credentials saved.")
+    client = Spot(api_key=api_key, api_secret=api_secret)
+else:
+    st.sidebar.warning("Please enter your Binance API credentials.")
 
 # Constants
 SYMBOLS = ["BTCUSDT", "ETHUSDT"]
@@ -43,8 +46,10 @@ STOP_LOSS_PERCENT = st.sidebar.slider("Stop Loss %", 1, 10, 2) / 100
 TAKE_PROFIT_PERCENT = st.sidebar.slider("Take Profit %", 1, 10, 5) / 100
 
 def get_price(symbol):
-    ticker = client.ticker_price(symbol)
-    return float(ticker["price"])
+    if client:
+        ticker = client.ticker_price(symbol)
+        return float(ticker["price"])
+    return None
 
 def get_tradingview_signal(symbol):
     analysis = TA_Handler(
@@ -53,19 +58,22 @@ def get_tradingview_signal(symbol):
     return analysis.get_analysis().summary
 
 def place_order(symbol, side, quantity):
-    try:
-        order = client.new_order(symbol=symbol, side=side, type="MARKET", quantity=quantity)
-        trade_collection.insert_one(order)
-        return order
-    except Exception as e:
-        st.error(f"Order failed: {e}")
-        return None
+    if client:
+        try:
+            order = client.new_order(symbol=symbol, side=side, type="MARKET", quantity=quantity)
+            trade_collection.insert_one(order)
+            return order
+        except Exception as e:
+            st.error(f"Order failed: {e}")
+    return None
 
 def trading_bot():
-    while True:
+    while client:
         for symbol in SYMBOLS:
             try:
                 price = get_price(symbol)
+                if price is None:
+                    continue
                 signal = get_tradingview_signal(symbol)
                 recommendation = signal["RECOMMENDATION"]
                 balance = client.account()["balances"]
@@ -83,32 +91,37 @@ def trading_bot():
         time.sleep(CHECK_FREQUENCY)
 
 def start_trading_bot():
-    thread = threading.Thread(target=trading_bot, daemon=True)
-    thread.start()
+    if client:
+        thread = threading.Thread(target=trading_bot, daemon=True)
+        thread.start()
+    else:
+        st.error("Please enter valid Binance API credentials to start trading.")
 
 # Streamlit Dashboard
 st.title("IRAM-B: Intelligent Risk-Aware Market Bot")
 st.subheader("Live Market Overview")
 
 # Fetch live data and visualize
-live_data = {symbol: get_price(symbol) for symbol in SYMBOLS}
-st.metric(label="Bitcoin (BTC)", value=f"${live_data['BTCUSDT']:.2f}")
-st.metric(label="Ethereum (ETH)", value=f"${live_data['ETHUSDT']:.2f}")
-
-# Price Trend Visualization
-history_data = pd.DataFrame({"Timestamp": [time.time()], "BTC Price": [live_data['BTCUSDT']], "ETH Price": [live_data['ETHUSDT']]})
-st.line_chart(history_data.set_index("Timestamp"))
-
-# Candlestick Chart
-st.subheader("BTC Price Candlestick Chart")
-data = client.klines(symbol="BTCUSDT", interval="1m", limit=50)
-df = pd.DataFrame(data, columns=["time", "open", "high", "low", "close", "volume", "ignore", "ignore", "ignore", "ignore", "ignore", "ignore"])
-df["time"] = pd.to_datetime(df["time"], unit="ms")
-df[["open", "high", "low", "close"]] = df[["open", "high", "low", "close"]].astype(float)
-
-fig = go.Figure()
-fig.add_trace(go.Candlestick(x=df["time"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="BTC Candlestick"))
-st.plotly_chart(fig)
+live_data = {symbol: get_price(symbol) for symbol in SYMBOLS if client}
+if live_data:
+    st.metric(label="Bitcoin (BTC)", value=f"${live_data.get('BTCUSDT', 0):.2f}")
+    st.metric(label="Ethereum (ETH)", value=f"${live_data.get('ETHUSDT', 0):.2f}")
+    
+    # Price Trend Visualization
+    history_data = pd.DataFrame({"Timestamp": [time.time()], "BTC Price": [live_data.get('BTCUSDT', 0)], "ETH Price": [live_data.get('ETHUSDT', 0)]})
+    st.line_chart(history_data.set_index("Timestamp"))
+    
+    # Candlestick Chart
+    st.subheader("BTC Price Candlestick Chart")
+    data = client.klines(symbol="BTCUSDT", interval="1m", limit=50) if client else []
+    if data:
+        df = pd.DataFrame(data, columns=["time", "open", "high", "low", "close", "volume", "ignore", "ignore", "ignore", "ignore", "ignore", "ignore"])
+        df["time"] = pd.to_datetime(df["time"], unit="ms")
+        df[["open", "high", "low", "close"]] = df[["open", "high", "low", "close"]].astype(float)
+        
+        fig = go.Figure()
+        fig.add_trace(go.Candlestick(x=df["time"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="BTC Candlestick"))
+        st.plotly_chart(fig)
 
 # Start Trading Bot Button
 if st.button("Start Trading Bot"):
