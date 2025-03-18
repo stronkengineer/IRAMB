@@ -1,7 +1,7 @@
 streamlit
-plotly
 pandas
-python-binance
-dotenv
+plotly
+python-dotenv
+binance-connector
 tradingview-ta
 pymongo
