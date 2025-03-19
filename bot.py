@@ -8,6 +8,29 @@ from dotenv import load_dotenv
 from binance.spot import Spot  # Updated import statement
 from tradingview_ta import TA_Handler, Interval
 from pymongo import MongoClient
+import streamlit as st
+import streamlit.components.v1 as components
+
+# Google Tag Manager Snippet
+def inject_gtm():
+    gtm_code = """
+    <script>
+    (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+    new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id=GTM-KVZFT9ZW'+dl;f.parentNode.insertBefore(j,f);
+    })(window,document,'script','dataLayer','GTM-KVZFT9ZW');
+    </script>
+
+    <noscript>
+    <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-KVZFT9ZW"
+    height="0" width="0" style="display:none;visibility:hidden"></iframe>
+    </noscript>
+    """
+    components.html(gtm_code, height=0)
+
+# Inject GTM
+inject_gtm()
 
 # Load environment variables
 load_dotenv()
