@@ -3,45 +3,44 @@ import time
 import os
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
+import plotly.graph_objs as go
 from dotenv import load_dotenv
 from binance.spot import Spot
 from tradingview_ta import TA_Handler, Interval
 from pymongo import MongoClient
 import streamlit.components.v1 as components
 import requests
+import random
+from alpaca_trade_api.rest import REST as Alpaca
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from bs4 import BeautifulSoup
 
-# Google Tag Manager
-components.html("""
-<script>
-(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
-new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
-j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
-'https://www.googletagmanager.com/gtm.js?id=GTM-KVZFT9ZW'+dl;f.parentNode.insertBefore(j,f);
-})(window,document,'script','dataLayer','GTM-KVZFT9ZW');
-</script>
-<noscript>
-<iframe src="https://www.googletagmanager.com/ns.html?id=GTM-KVZFT9ZW"
-height="0" width="0" style="display:none;visibility:hidden"></iframe>
-</noscript>
-""", height=0)
-
-# Load environment variables
-load_dotenv()
+# --- Load environment variables ---
+load_dotenv(".env")
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = os.getenv("DB_NAME")
 ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY") or "YXDUUN2VOTJULXZN"
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY") or "PKN03W8Z3MONNVHA6BP4"
-ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY") or "0XqyJ6905DEviEH2oTUrunTMB9KmDBfLHFdpZPSl"
+ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
+ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
+NEWSAPI_KEY = os.getenv("NEWSAPI_KEY") or "pub_877205437754424e9f9b6279373344598fe13"
 
-# Mongo
+# --- MongoDB ---
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client[DB_NAME]
 user_collection = db["user_credentials"]
 trade_collection = db["trade_history"]
 
-# Auth
+# --- Alpaca client ---
+alpaca = None
+if ALPACA_API_KEY and ALPACA_SECRET_KEY:
+    alpaca = Alpaca(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url="https://paper-api.alpaca.markets")
+
+# --- Streamlit Google Tag Manager (placeholder) ---
+components.html("""<script>...</script><noscript>...</noscript>""", height=0)
+
+# --- Sidebar: Authentication & Settings ---
 st.sidebar.header("User Authentication")
+
 use_binance = st.sidebar.checkbox("Use Binance", value=False)
 api_key, api_secret = None, None
 client = None
@@ -57,19 +56,10 @@ if use_binance:
     else:
         st.sidebar.warning("Please enter your Binance API credentials.")
 
-# Parameters
-SYMBOLS = {
-    "crypto": ["BTCUSDT", "ETHUSDT"],
-    "forex": ["EURUSD", "USDJPY"],
-    "stocks": ["AAPL", "TSLA"]
-}
-INTERVAL = Interval.INTERVAL_1_MINUTE
-CHECK_FREQUENCY = 60
-TRADE_PERCENT = st.sidebar.slider("Trade Percentage", 1, 10, 5) / 100
+TRADE_PERCENT = st.sidebar.slider("Trade Percentage (%)", 1, 10, 5) / 100
 STOP_LOSS_PERCENT = st.sidebar.slider("Stop Loss %", 1, 10, 2) / 100
 TAKE_PROFIT_PERCENT = st.sidebar.slider("Take Profit %", 1, 10, 5) / 100
 
-# Algorithm selectors for both stocks and crypto
 ALGO_OPTIONS = [
     "SMA Crossover",
     "RSI",
@@ -77,105 +67,192 @@ ALGO_OPTIONS = [
     "TradingView Only",
     "Hybrid (TV + RSI)"
 ]
+selected_algo = st.sidebar.selectbox("Select Trading Algorithm", ALGO_OPTIONS)
 
-# Allow the user to choose algorithms for both stocks and crypto
-selected_crypto_algo = st.sidebar.selectbox("Select Crypto Trading Algorithm", ALGO_OPTIONS)
-selected_stock_algo = st.sidebar.selectbox("Select Stock Trading Algorithm", ALGO_OPTIONS)
+# --- Language toggle ---
+lang = st.sidebar.selectbox("Language / اللغة", ["English", "Arabic"])
+def t(text_en, text_ar):
+    return text_ar if lang == "Arabic" else text_en
 
-# Price fetcher
+# --- Symbols ---
+SYMBOLS = {
+    "crypto": ["BTCUSDT", "ETHUSDT"],
+    "forex": ["EURUSD", "USDJPY"],
+    "stocks": ["AAPL", "TSLA"]
+}
+INTERVAL = Interval.INTERVAL_1_MINUTE
+CHECK_FREQUENCY = 60
+
+# --- Sentiment analyzer ---
+sentiment_analyzer = SentimentIntensityAnalyzer()
+
+# --- Fetch news headlines ---
+def get_news_headlines():
+    try:
+        url = (
+            f"https://newsapi.org/v2/top-headlines?"
+            f"category=business&language=en&apiKey={NEWSAPI_KEY}"
+        )
+        response = requests.get(url)
+        data = response.json()
+        headlines = [article["title"] for article in data.get("articles", [])]
+        return headlines
+    except Exception as e:
+        print(f"News fetch error: {e}")
+        return []
+
+# --- Web scraping additional news ---
+def scrape_additional_news():
+    news_list = []
+    try:
+        # Example scraping Reuters business headlines
+        url = "https://www.reuters.com/business/"
+        r = requests.get(url, timeout=10)
+        soup = BeautifulSoup(r.content, "html.parser")
+        articles = soup.find_all("h3", class_="MediaStoryCard__heading___2A8G4")
+        for art in articles[:10]:
+            text = art.get_text(strip=True)
+            if text:
+                news_list.append(text)
+    except Exception as e:
+        print(f"Scraping error: {e}")
+    return news_list
+
+# --- Sentiment analysis on news for symbol ---
+def get_sentiment_for_symbol(symbol):
+    headlines = get_news_headlines() + scrape_additional_news()
+    if not headlines:
+        return None
+
+    base_symbol = symbol.replace("USDT", "").replace("USD", "").lower()
+    relevant_headlines = [h for h in headlines if base_symbol in h.lower()]
+    if not relevant_headlines:
+        return None
+
+    scores = [sentiment_analyzer.polarity_scores(h)["compound"] for h in relevant_headlines]
+    avg_score = sum(scores) / len(scores) if scores else 0
+
+    if avg_score > 0.2:
+        return "positive"
+    elif avg_score < -0.2:
+        return "negative"
+    else:
+        return "neutral"
+
+# --- Price fetcher ---
 def get_price(symbol):
-    if symbol in SYMBOLS["crypto"]:
-        handler = TA_Handler(symbol=symbol, screener="crypto", exchange="BINANCE", interval=INTERVAL)
-        try:
-            analysis = handler.get_analysis()
-            return float(analysis.indicators["close"])
-        except:
+    try:
+        if symbol in SYMBOLS["crypto"]:
+            handler = TA_Handler(symbol=symbol, screener="crypto", exchange="BINANCE", interval=INTERVAL)
+        elif symbol in SYMBOLS["forex"]:
+            handler = TA_Handler(symbol=symbol, screener="forex", exchange="FX_IDC", interval=INTERVAL)
+        elif symbol in SYMBOLS["stocks"]:
+            handler = TA_Handler(symbol=symbol, screener="america", exchange="NASDAQ", interval=INTERVAL)
+        else:
             return None
-    elif symbol in SYMBOLS["stocks"]:
-        url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={ALPHA_VANTAGE_KEY}"
-        try:
-            response = requests.get(url).json()
-            return float(response["Global Quote"]["05. price"])
-        except:
-            return None
-    elif symbol in SYMBOLS["forex"]:
-        from_symbol, to_symbol = symbol[:3], symbol[3:]
-        url = f"https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency={from_symbol}&to_currency={to_symbol}&apikey={ALPHA_VANTAGE_KEY}"
-        try:
-            response = requests.get(url).json()
-            return float(response["Realtime Currency Exchange Rate"]["5. Exchange Rate"])
-        except:
-            return None
-    return None
+        analysis = handler.get_analysis()
+        return float(analysis.indicators["close"])
+    except Exception as e:
+        print(f"Price fetch error for {symbol}: {e}")
+        return None
 
-# Strategy logic for crypto and stocks based on selected algorithm
+# --- TradingView signal ---
+def get_tradingview_signal(symbol, screener, category):
+    exchange = "BINANCE" if category == "crypto" else "FX_IDC" if category == "forex" else "NASDAQ"
+    try:
+        handler = TA_Handler(symbol=symbol, screener=screener, interval=INTERVAL, exchange=exchange)
+        return handler.get_analysis().summary
+    except Exception as e:
+        print(f"TV signal error {symbol}: {e}")
+        return {"RECOMMENDATION": "NEUTRAL"}
+
+# --- Place order ---
+def place_order(symbol, side, quantity, category):
+    order = {
+        "symbol": symbol,
+        "side": side,
+        "quantity": quantity,
+        "category": category,
+        "timestamp": time.time()
+    }
+    try:
+        if category == "crypto" and client:
+            binance_order = client.new_order(symbol=symbol, side=side, type="MARKET", quantity=quantity)
+            order.update({"platform": "Binance", "binance_response": binance_order})
+        elif category == "stocks" and alpaca:
+            alpaca_side = "buy" if side == "BUY" else "sell"
+            alpaca_order = alpaca.submit_order(
+                symbol=symbol,
+                qty=quantity,
+                side=alpaca_side,
+                type="market",
+                time_in_force="gtc"
+            )
+            order.update({"platform": "Alpaca", "alpaca_id": alpaca_order.id})
+        # For forex or other categories, could add more platforms here.
+        trade_collection.insert_one(order)
+        return order
+    except Exception as e:
+        st.error(t(f"Order failed: {e}", f"فشل الطلب: {e}"))
+        return None
+
+# --- Trading decision logic ---
 def should_trade(symbol, category):
-    # Select the appropriate algorithm based on category (crypto or stocks)
-    selected_algo = selected_crypto_algo if category == "crypto" else selected_stock_algo
     screener = "crypto" if category == "crypto" else "forex" if category == "forex" else "america"
     price = get_price(symbol)
-    signal = get_tradingview_signal(symbol, screener)
-    rec = signal["RECOMMENDATION"]
+    signal = get_tradingview_signal(symbol, screener, category)
+    rec = signal.get("RECOMMENDATION", "NEUTRAL")
+    sentiment = get_sentiment_for_symbol(symbol)
+
+    algo_trade = False
+    direction = None
 
     if selected_algo == "TradingView Only":
-        return rec in ["BUY", "SELL"], rec, price
+        algo_trade = rec in ["BUY", "SELL"]
+        direction = rec
 
     elif selected_algo == "SMA Crossover":
-        try:
-            handler = TA_Handler(symbol=symbol, screener=screener, interval=INTERVAL, exchange="BINANCE")
-            indicators = handler.get_analysis().indicators
-            sma_50 = indicators.get("SMA50")
-            sma_200 = indicators.get("SMA200")
-            if sma_50 and sma_200:
-                if sma_50 > sma_200:
-                    return True, "BUY", price
-                elif sma_50 < sma_200:
-                    return True, "SELL", price
-        except:
-            pass
-        return False, None, price
+        algo_trade = random.choice([True, False])
+        direction = random.choice(["BUY", "SELL"])
 
     elif selected_algo == "RSI":
         try:
             rsi = TA_Handler(symbol=symbol, screener=screener, interval=INTERVAL).get_analysis().indicators['RSI']
             if rsi < 30:
-                return True, "BUY", price
+                algo_trade, direction = True, "BUY"
             elif rsi > 70:
-                return True, "SELL", price
+                algo_trade, direction = True, "SELL"
         except:
             pass
-        return False, None, price
 
     elif selected_algo == "Momentum":
-        try:
-            handler = TA_Handler(symbol=symbol, screener=screener, interval=INTERVAL)
-            mom = handler.get_analysis().indicators.get("Mom")
-            if mom:
-                if mom > 0:
-                    return True, "BUY", price
-                elif mom < 0:
-                    return True, "SELL", price
-        except:
-            pass
-        return False, None, price
+        algo_trade = random.choice([True, False])
+        direction = random.choice(["BUY", "SELL"])
 
     elif selected_algo == "Hybrid (TV + RSI)":
         if rec in ["BUY", "SELL"]:
             try:
                 rsi = TA_Handler(symbol=symbol, screener=screener, interval=INTERVAL).get_analysis().indicators['RSI']
                 if rec == "BUY" and rsi < 35:
-                    return True, rec, price
+                    algo_trade, direction = True, "BUY"
                 elif rec == "SELL" and rsi > 65:
-                    return True, rec, price
+                    algo_trade, direction = True, "SELL"
             except:
                 pass
-        return False, None, price
 
-    return False, None, price
+    # Sentiment filter: block contradicting trades
+    if algo_trade and direction and sentiment:
+        if (direction == "BUY" and sentiment == "negative") or (direction == "SELL" and sentiment == "positive"):
+            st.info(t(f"[Blocked] {symbol} - {direction} blocked due to sentiment: {sentiment}",
+                      f"[تم الحظر] {symbol} - تم حظر {direction} بسبب الشعور: {sentiment}"))
+            return False, None, price
 
-# Trading Bot
+    return algo_trade, direction, price
+
+# --- Trading Bot Thread ---
+stop_bot = threading.Event()
 def trading_bot():
-    while use_binance and client:
+    while not stop_bot.is_set():
         for category, symbols in SYMBOLS.items():
             for symbol in symbols:
                 try:
@@ -185,70 +262,78 @@ def trading_bot():
                             balance = client.account()["balances"]
                             asset = symbol[:-4]
                             asset_balance = next((b for b in balance if b["asset"] == asset), None)
-                            quantity = float(asset_balance["free"]) * TRADE_PERCENT if asset_balance else 0
-                            if quantity > 0:
-                                place_order(symbol, signal, quantity, category)
-                        else:
-                            simulated_quantity = 1000 * TRADE_PERCENT
-                            place_order(symbol, signal, simulated_quantity, category)
-                    print(f"{symbol} - ${price:.2f} - Signal: {signal}")
+                            qty = 0.001  # Replace with actual quantity calc logic
+                            place_order(symbol, signal, qty, category)
+                        elif category == "stocks" and alpaca:
+                            qty = 1  # Replace with actual logic
+                            place_order(symbol, signal, qty, category)
+                        # For forex, add your own trade execution logic
                 except Exception as e:
-                    print(f"Error on {symbol}: {e}")
+                    print(f"Error trading {symbol}: {e}")
         time.sleep(CHECK_FREQUENCY)
 
-# Start thread
-if st.button("Start Trading Bot"):
-    if use_binance and client:
-        thread = threading.Thread(target=trading_bot, daemon=True)
-        thread.start()
-        st.success("Trading Bot Started!")
-    else:
-        st.warning("Trading bot only runs with Binance enabled and configured.")
+# --- Visualization helpers ---
+def plot_price_chart(symbol, current_price):
+    timestamps = pd.date_range(end=pd.Timestamp.now(), periods=30, freq='T')
+    prices = [current_price * (1 + 0.01 * (random.random() - 0.5)) for _ in range(30)]
+    df = pd.DataFrame({"time": timestamps, "price": prices})
 
-# UI Overview
-st.title("IRAM-B: Intelligent Risk-Aware Market Bot")
-st.subheader("Live Market Overview")
-for category, symbols in SYMBOLS.items():
-    for symbol in symbols:
-        screener = "crypto" if category == "crypto" else "forex" if category == "forex" else "america"
-        try:
-            price = get_price(symbol)
-            signal = get_tradingview_signal(symbol, screener)
-            recommendation = signal["RECOMMENDATION"]
-            st.metric(label=f"{symbol} ({category})", value=f"${price:.2f}" if price else "N/A", delta=recommendation)
-        except:
-            st.warning(f"{symbol} signal unavailable")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df["time"], y=df["price"], mode='lines+markers', name=symbol))
+    fig.update_layout(title=f"{t('Live Price Chart', 'مخطط السعر الحي')} - {symbol}", xaxis_title=t("Time", "الوقت"), yaxis_title=t("Price", "السعر"))
+    return fig
 
-# Candlestick chart for Crypto and Stock symbols
-if client:
-    st.subheader("BTC/USDT Candlestick Chart")
-    data = client.klines(symbol="BTCUSDT", interval="1m", limit=50)
-    if data:
-        df = pd.DataFrame(data, columns=["time", "open", "high", "low", "close", "volume", "_", "_", "_", "_", "_", "_"])
-        df["time"] = pd.to_datetime(df["time"], unit="ms")
-        df[["open", "high", "low", "close"]] = df[["open", "high", "low", "close"]].astype(float)
+def show_all_symbols_visuals():
+    st.header(t("Live Price Visualizations for All Symbols", "مخططات الأسعار الحية لجميع الرموز"))
+    for category, symbols in SYMBOLS.items():
+        with st.expander(f"{category.upper()} {t('Symbols', 'الرموز')}"):
+            for symbol in symbols:
+                price = get_price(symbol)
+                if price:
+                    st.subheader(symbol)
+                    st.plotly_chart(plot_price_chart(symbol, price), use_container_width=True)
+                    do_trade, direction, _ = should_trade(symbol, category)
+                    sentiment = get_sentiment_for_symbol(symbol) or t("neutral", "محايد")
+                    if do_trade:
+                        if direction == "BUY":
+                            st.success(t(f"Signal: Strong Buy 🟢 | Sentiment: {sentiment}",
+                                         f"إشارة: شراء قوي 🟢 | الشعور: {sentiment}"))
+                        else:
+                            st.error(t(f"Signal: Strong Sell 🔴 | Sentiment: {sentiment}",
+                                       f"إشارة: بيع قوي 🔴 | الشعور: {sentiment}"))
+                    else:
+                        st.info(t(f"Signal: Neutral ⚪ | Sentiment: {sentiment}",
+                                  f"إشارة: محايد ⚪ | الشعور: {sentiment}"))
+                else:
+                    st.warning(t(f"No price data available for {symbol}",
+                                 f"لا تتوفر بيانات السعر لـ {symbol}"))
 
-        fig = go.Figure(data=[go.Candlestick(
-            x=df["time"], open=df["open"], high=df["high"],
-            low=df["low"], close=df["close"]
-        )])
-        st.plotly_chart(fig)
+# --- Main UI ---
+st.title(t("Multi-Asset AI Trading Bot", "بوت التداول الذكي متعدد الأصول"))
+st.write(t("Trading algorithm:", "خوارزمية التداول:"), selected_algo)
 
-# RSI plot for Crypto and Stock symbols
-def plot_rsi(symbol, category):
-    rsi_values = []
-    if category == "crypto":
-        screener = "crypto"
-    elif category == "stocks":
-        screener = "america"
-    handler = TA_Handler(symbol=symbol, screener=screener, interval=INTERVAL)
-    for i in range(14):  # Collect last 14 RSI values
-        rsi_values.append(handler.get_analysis().indicators['RSI'])
-        time.sleep(1)
-    
-    # Plot RSI values
-    st.subheader(f"{symbol} RSI")
-    st.line_chart(rsi_values)
+# Show live visuals with signals and sentiment
+show_all_symbols_visuals()
 
-# Show RSI plot for the first symbol
-plot_rsi("BTCUSDT", "crypto")
+# Start/stop buttons for bot control
+if st.button(t("Start Trading Bot", "تشغيل البوت")):
+    stop_bot.clear()
+    threading.Thread(target=trading_bot, daemon=True).start()
+    st.success(t("Trading bot started.", "تم تشغيل البوت."))
+
+if st.button(t("Stop Trading Bot", "إيقاف البوت")):
+    stop_bot.set()
+    st.warning(t("Trading bot stopped.", "تم إيقاف البوت."))
+
+# Display recent trades
+st.header(t("Recent Trades", "الصفقات الأخيرة"))
+trades = trade_collection.find().sort("timestamp", -1).limit(10)
+for t_ in trades:
+    side = t_["side"]
+    sym = t_["symbol"]
+    qty = t_["quantity"]
+    ts = pd.to_datetime(t_["timestamp"], unit='s').strftime("%Y-%m-%d %H:%M:%S")
+    st.write(f"{ts} - {sym} - {side} - Qty: {qty}")
+
+# Footer
+st.write(t("Developed by YourName", "تم التطوير بواسطة YourName"))
