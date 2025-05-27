@@ -5,7 +5,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objs as go
 from dotenv import load_dotenv
-from binance.spot import Spot
+from binance.client import Client
 from tradingview_ta import TA_Handler, Interval
 from pymongo import MongoClient
 import streamlit.components.v1 as components
@@ -63,7 +63,7 @@ if use_binance:
         if not user:
             user_collection.insert_one({"api_key": api_key, "api_secret": api_secret})
             st.sidebar.success("API credentials saved.")
-        client = Spot(api_key=api_key, api_secret=api_secret)
+        client = Client(api_key=api_key, api_secret=api_secret)
     else:
         st.sidebar.warning("Please enter your Binance API credentials.")
 
