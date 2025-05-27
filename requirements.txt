@@ -2,6 +2,12 @@ streamlit
 pandas
 plotly
 python-dotenv
-binance-connector
+python-binance
 tradingview-ta
 pymongo
+requests
+alpaca-trade-api
+vaderSentiment
+beautifulsoup4
+numpy
+scipy

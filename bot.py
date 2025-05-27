@@ -14,6 +14,17 @@ import random
 from alpaca_trade_api.rest import REST as Alpaca
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from bs4 import BeautifulSoup
+import pandas as pd
+import random
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+import random
+import pandas as pd
+import numpy as np
+from scipy.signal import find_peaks
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # --- Load environment variables ---
 load_dotenv(".env")
@@ -273,14 +284,123 @@ def trading_bot():
         time.sleep(CHECK_FREQUENCY)
 
 # --- Visualization helpers ---
-def plot_price_chart(symbol, current_price):
-    timestamps = pd.date_range(end=pd.Timestamp.now(), periods=30, freq='T')
-    prices = [current_price * (1 + 0.01 * (random.random() - 0.5)) for _ in range(30)]
-    df = pd.DataFrame({"time": timestamps, "price": prices})
+def find_support_resistance_levels(prices, distance=5, prominence=0.01):
+    prices = np.array(prices)
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df["time"], y=df["price"], mode='lines+markers', name=symbol))
-    fig.update_layout(title=f"{t('Live Price Chart', 'مخطط السعر الحي')} - {symbol}", xaxis_title=t("Time", "الوقت"), yaxis_title=t("Price", "السعر"))
+    resistances, _ = find_peaks(prices, distance=distance, prominence=prominence)
+    supports, _ = find_peaks(-prices, distance=distance, prominence=prominence)
+
+    return supports, resistances
+
+def plot_price_chart(symbol, current_price):
+    timestamps = pd.date_range(end=pd.Timestamp.now(), periods=60, freq='T')
+    prices = [current_price * (1 + 0.01 * (random.random() - 0.5)) for _ in range(60)]
+    volumes = [random.randint(100, 1000) for _ in range(60)]
+    df = pd.DataFrame({"time": timestamps, "price": prices, "volume": volumes})
+
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.2,
+        subplot_titles=(t("Price Chart", "مخطط السعر"), t("Volume", "الحجم"))
+    )
+
+    # Plot price line
+    fig.add_trace(
+        go.Scatter(
+            x=df["time"], y=df["price"], mode='lines+markers',
+            name=t("Price", "السعر")
+        ),
+        row=1, col=1
+    )
+
+    # Plot volume bars
+    fig.add_trace(
+        go.Bar(
+            x=df["time"], y=df["volume"], name=t("Volume", "الحجم"),
+            marker=dict(color='lightblue')
+        ),
+        row=2, col=1
+    )
+
+    # Find support and resistance levels for the price data
+    supports_idx, resistances_idx = find_support_resistance_levels(
+        df["price"], distance=5, prominence=0.01
+    )
+
+    # Add support lines (green dotted)
+    for idx in supports_idx:
+        price_level = df["price"].iloc[idx]
+        fig.add_hline(
+            y=price_level, line_dash="dot", line_color="green",
+            annotation_text="", annotation_position="bottom right",
+            row=1, col=1
+        )
+
+    # Add resistance lines (red dotted)
+    for idx in resistances_idx:
+        price_level = df["price"].iloc[idx]
+        fig.add_hline(
+            y=price_level, line_dash="dot", line_color="red",
+            annotation_text="", annotation_position="top right",
+            row=1, col=1
+        )
+
+    fig.update_layout(
+        height=600,
+        title_text=f"{t('Live Data', 'البيانات الحية')} - {symbol}",
+        xaxis_title=t("Time", "الوقت"),
+        yaxis_title=t("Price", "السعر")
+    )
+
+    return fig
+
+
+def plot_candlestick_chart(symbol, current_price):
+    timestamps = pd.date_range(end=pd.Timestamp.now(), periods=60, freq='T')
+    df = pd.DataFrame({
+        "time": timestamps,
+        "open": [current_price * (1 + 0.01 * (random.random() - 0.5)) for _ in range(60)],
+        "high": [current_price * (1 + 0.02 * random.random()) for _ in range(60)],
+        "low": [current_price * (1 - 0.02 * random.random()) for _ in range(60)],
+        "close": [current_price * (1 + 0.01 * (random.random() - 0.5)) for _ in range(60)],
+        "volume": [random.randint(100, 1000) for _ in range(60)]
+    })
+
+    fig = go.Figure(
+        data=[go.Candlestick(
+            x=df["time"],
+            open=df["open"], high=df["high"],
+            low=df["low"], close=df["close"],
+            name=symbol
+        )]
+    )
+
+    # Find support and resistance levels
+    supports_idx, resistances_idx = find_support_resistance_levels(
+        df['close'], distance=5, prominence=0.01
+    )
+
+    # Plot support levels (green dotted lines)
+    for idx in supports_idx:
+        price_level = df['close'].iloc[idx]
+        fig.add_hline(
+            y=price_level, line_dash="dot", line_color="green",
+            annotation_text="", annotation_position="bottom right"
+        )
+
+    # Plot resistance levels (red dotted lines)
+    for idx in resistances_idx:
+        price_level = df['close'].iloc[idx]
+        fig.add_hline(
+            y=price_level, line_dash="dot", line_color="red",
+            annotation_text="", annotation_position="top right"
+        )
+
+    fig.update_layout(
+        title=f"{t('Candlestick Chart', 'مخطط الشموع')} - {symbol}",
+        xaxis_title=t("Time", "الوقت"),
+        yaxis_title=t("Price", "السعر")
+    )
+
     return fig
 
 def show_all_symbols_visuals():
@@ -291,7 +411,14 @@ def show_all_symbols_visuals():
                 price = get_price(symbol)
                 if price:
                     st.subheader(symbol)
+
+                    # 🌟 Show Line + Volume Chart
                     st.plotly_chart(plot_price_chart(symbol, price), use_container_width=True)
+
+                    # 🌟 Show Candlestick Chart
+                    st.plotly_chart(plot_candlestick_chart(symbol, price), use_container_width=True)
+
+                    # 🌟 Trade Signals
                     do_trade, direction, _ = should_trade(symbol, category)
                     sentiment = get_sentiment_for_symbol(symbol) or t("neutral", "محايد")
                     if do_trade:
@@ -307,7 +434,6 @@ def show_all_symbols_visuals():
                 else:
                     st.warning(t(f"No price data available for {symbol}",
                                  f"لا تتوفر بيانات السعر لـ {symbol}"))
-
 # --- Main UI ---
 st.title(t("Multi-Asset AI Trading Bot", "بوت التداول الذكي متعدد الأصول"))
 st.write(t("Trading algorithm:", "خوارزمية التداول:"), selected_algo)
@@ -336,4 +462,4 @@ for t_ in trades:
     st.write(f"{ts} - {sym} - {side} - Qty: {qty}")
 
 # Footer
-st.write(t("Developed by YourName", "تم التطوير بواسطة YourName"))
+st.write(t("IRAM-B :: Adam Elnaba", "تم التطوير بواسطة IRAM-B"))
