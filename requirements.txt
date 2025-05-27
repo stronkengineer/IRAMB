@@ -12,3 +12,4 @@ beautifulsoup4
 numpy
 scipy
 binance
+cryptography>=38.0.0
