@@ -11,5 +11,6 @@ vaderSentiment
 beautifulsoup4
 numpy
 scipy
-binance
+binance==1.0.15
+ccxt==1.105.45
 cryptography>=38.0.0
