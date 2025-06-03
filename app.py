@@ -602,12 +602,11 @@ def find_support_resistance_levels(prices, distance=5, prominence=0.01):
 def plot_price_chart(symbol, current_price):
     timestamps = pd.date_range(end=pd.Timestamp.now(), periods=60, freq='T')
     prices = [current_price * (1 + 0.005 * (random.random() - 0.5)) for _ in range(60)]
-    volumes = [random.randint(100, 500) for _ in range(60)]
-    df = pd.DataFrame({"time": timestamps, "price": prices, "volume": volumes})
+    df = pd.DataFrame({"time": timestamps, "price": prices})
 
     fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15,
-        subplot_titles=(t("Price Chart", "مخطط السعر"), t("Volume", "الحجم"))
+        rows=1, cols=1,
+        subplot_titles=(t("Price Chart", "مخطط السعر"),)
     )
 
     fig.add_trace(
@@ -619,39 +618,8 @@ def plot_price_chart(symbol, current_price):
         row=1, col=1
     )
 
-    fig.add_trace(
-        go.Bar(
-            x=df["time"], y=df["volume"], name=t("No of assets traded", "الحجم"),
-            marker=dict(color='royalblue')
-        ),
-        row=2, col=1
-    )
-
-    # Support and resistance detection
-    supports_idx, resistances_idx = find_support_resistance_levels(
-        df["price"], distance=15, prominence=0.02
-    )
-
-    # Add support (green)
-    for idx in supports_idx:
-        price_level = df["price"].iloc[idx]
-        fig.add_hline(
-            y=price_level, line_dash="dash", line_color="limegreen",
-            annotation_text=t("", "دعم"), annotation_position="bottom right",
-            row=1, col=1, line_width=1.5
-        )
-
-    # Add resistance (red)
-    for idx in resistances_idx:
-        price_level = df["price"].iloc[idx]
-        fig.add_hline(
-            y=price_level, line_dash="dash", line_color="orangered",
-            annotation_text=t("", "مقاومة"), annotation_position="top right",
-            row=1, col=1, line_width=1.5
-        )
-
     fig.update_layout(
-        height=600,
+        height=400,
         title_text=f"{t('Live Data', 'البيانات الحية')} - {symbol}",
         xaxis=dict(color='white'),
         yaxis=dict(color='white'),
@@ -664,7 +632,6 @@ def plot_price_chart(symbol, current_price):
 
     return fig
 
-
 def plot_candlestick_chart(symbol, current_price):
     timestamps = pd.date_range(end=pd.Timestamp.now(), periods=60, freq='T')
     df = pd.DataFrame({
@@ -672,8 +639,7 @@ def plot_candlestick_chart(symbol, current_price):
         "open": [current_price * (1 + 0.005 * (random.random() - 0.5)) for _ in range(60)],
         "high": [current_price * (1 + 0.01 * random.random()) for _ in range(60)],
         "low": [current_price * (1 - 0.01 * random.random()) for _ in range(60)],
-        "close": [current_price * (1 + 0.005 * (random.random() - 0.5)) for _ in range(60)],
-        "volume": [random.randint(100, 500) for _ in range(60)]
+        "close": [current_price * (1 + 0.005 * (random.random() - 0.5)) for _ in range(60)]
     })
 
     fig = go.Figure(
@@ -685,26 +651,6 @@ def plot_candlestick_chart(symbol, current_price):
             increasing_line_color='lime', decreasing_line_color='red'
         )]
     )
-
-    supports_idx, resistances_idx = find_support_resistance_levels(
-        df['close'], distance=15, prominence=0.02
-    )
-
-    for idx in supports_idx:
-        price_level = df['close'].iloc[idx]
-        fig.add_hline(
-            y=price_level, line_dash="dash", line_color="limegreen",
-            annotation_text=t("", "دعم"), annotation_position="bottom right",
-            line_width=1.5
-        )
-
-    for idx in resistances_idx:
-        price_level = df['close'].iloc[idx]
-        fig.add_hline(
-            y=price_level, line_dash="dash", line_color="orangered",
-            annotation_text=t("", "مقاومة"), annotation_position="top right",
-            line_width=1.5
-        )
 
     fig.update_layout(
         title=f"{t('Candlestick Chart', 'مخطط الشموع')} - {symbol}",
