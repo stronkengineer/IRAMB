@@ -594,9 +594,6 @@ if st.button("Stop Trading Bot"):
         status_area.text("Trading bot is not running.")
 
 # --- Visualization helpers ---
-def find_support_resistance_levels(prices, distance=5, prominence=0.01):
-    prices = np.array(prices)
-    return find_peaks(-prices, distance=distance, prominence=prominence)[0], find_peaks(prices, distance=distance, prominence=prominence)[0]
 
 
 def plot_price_chart(symbol, current_price):
