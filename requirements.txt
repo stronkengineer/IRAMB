@@ -11,5 +11,6 @@ beautifulsoup4
 numpy
 scipy
 yfinance
+alpha_vantage
 python-binance==1.0.15
 cryptography>=38.0.0
