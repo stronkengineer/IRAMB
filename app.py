@@ -728,5 +728,6 @@ if trades:
 else:
     st.info(t("No trades available.", "لا توجد صفقات متاحة."))
 
-# Footer
+# Footer 
+
 st.write(t("IRAM-B :: Adam Elnaba", "تم التطوير بواسطة IRAM-B"))
