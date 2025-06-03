@@ -663,7 +663,6 @@ def plot_candlestick_chart(symbol, current_price):
 
     return fig
 
-
 def show_all_symbols_visuals():
     st.header(t("Live Price Visualizations for All Symbols", "مخططات الأسعار الحية لجميع الرموز"))
     for category, symbols in SYMBOLS.items():
