@@ -13,8 +13,6 @@ import yfinance as yf
 # Your API keys here
 ALPHA_VANTAGE_KEY = "B6762CER4FORROBH"
 FMP_API_KEY = "gzoC7P7Ly3pWMoKHgLc1hXkPq7kMOafk"
-BINANCE_API_KEY = "NPXlmdB5YkQmjsmv2ZrtrCirHVQSBIhQMOkBfA4NkfBQVkzA8XK2Hp9N53E5WPoo"
-BINANCE_API_SECRET = "Iwlz5wVmszSThrvzGXdiIWcdQ6AvF7hA7cpoY7LxGLKMIHKObKqTGa8wmkbmXbUU"
 
 # Setup Alpha Vantage clients
 fx_client = ForeignExchange(key=ALPHA_VANTAGE_KEY)
@@ -22,7 +20,6 @@ ts_client = TimeSeries(key=ALPHA_VANTAGE_KEY, output_format='pandas')
 ti_client = TechIndicators(key=ALPHA_VANTAGE_KEY, output_format='pandas')
 
 # Setup Binance client
-binance_client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
 
 # Fetch stock data from Financial Modeling Prep
 def fetch_stock_data(symbol):
@@ -92,22 +89,6 @@ def fetch_commodity_yfinance(symbol):
         st.error(f"yfinance error fetching commodity {symbol}: {e}")
         return None
 
-# Fetch crypto data from Binance
-def fetch_crypto_data_binance(symbol, interval='1d', limit=100):
-    try:
-        klines = binance_client.get_klines(symbol=symbol, interval=interval, limit=limit)
-        df = pd.DataFrame(klines, columns=[
-            "open_time", "open", "high", "low", "close", "volume",
-            "close_time", "quote_asset_volume", "number_of_trades",
-            "taker_buy_base_asset_volume", "taker_buy_quote_asset_volume", "ignore"
-        ])
-        df['open_time'] = pd.to_datetime(df['open_time'], unit='ms')
-        df.set_index('open_time', inplace=True)
-        df = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
-        return df
-    except Exception as e:
-        st.error(f"Binance API error: {e}")
-        return None
 
 # Fetch crypto data from CryptoCompare (daily)
 def fetch_crypto_data_cryptocompare(symbol, limit=100):
@@ -231,15 +212,12 @@ elif asset_type == "Forex":
 
 elif asset_type == "Cryptocurrency":
     symbol = st.text_input("Enter Crypto Symbol (e.g., BTCUSDT)", "BTCUSDT")
-    data_source = st.selectbox("Select Crypto Data Source", ["Binance", "CryptoCompare"])
     if st.button("Fetch and Plot"):
-        if data_source == "Binance":
-            df = fetch_crypto_data_binance(symbol)
-        else:
-            df = fetch_crypto_data_cryptocompare(symbol)
+        df = fetch_crypto_data_cryptocompare(symbol)
         if df is not None:
             df = add_technical_indicators(df)
             plot_chart_with_indicators(df, title=f"{symbol.upper()} Crypto Price")
+
 
 elif asset_type == "Commodities":
     symbol = st.text_input("Enter Commodity Symbol (yfinance format, e.g. GC=F for Gold)", "GC=F")
