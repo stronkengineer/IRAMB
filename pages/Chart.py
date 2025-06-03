@@ -93,7 +93,7 @@ def fetch_commodity_yfinance(symbol):
         return None
 
 # Fetch crypto data from Binance
-def fetch_crypto_data(symbol, interval='1d', limit=100):
+def fetch_crypto_data_binance(symbol, interval='1d', limit=100):
     try:
         klines = binance_client.get_klines(symbol=symbol, interval=interval, limit=limit)
         df = pd.DataFrame(klines, columns=[
@@ -107,6 +107,41 @@ def fetch_crypto_data(symbol, interval='1d', limit=100):
         return df
     except Exception as e:
         st.error(f"Binance API error: {e}")
+        return None
+
+# Fetch crypto data from CryptoCompare (daily)
+def fetch_crypto_data_cryptocompare(symbol, limit=100):
+    try:
+        # Assume symbol like BTCUSDT, we take BTC as base and USD as quote
+        if len(symbol) > 3:
+            base = symbol[:-4]  # e.g. BTC from BTCUSDT
+            quote = symbol[-4:]  # e.g. USDT
+            # CryptoCompare uses USD as quote, so convert USDT -> USD for API
+            if quote.upper() in ['USDT', 'USD']:
+                quote = 'USD'
+        else:
+            base = symbol
+            quote = 'USD'
+        url = f"https://min-api.cryptocompare.com/data/v2/histoday?fsym={base.upper()}&tsym={quote.upper()}&limit={limit}"
+        response = requests.get(url)
+        data = response.json()
+        if data['Response'] != 'Success':
+            st.error(f"CryptoCompare API error: {data.get('Message', 'Unknown error')}")
+            return None
+        df = pd.DataFrame(data['Data']['Data'])
+        df['time'] = pd.to_datetime(df['time'], unit='s')
+        df.set_index('time', inplace=True)
+        df = df.rename(columns={
+            'open': 'open',
+            'high': 'high',
+            'low': 'low',
+            'close': 'close',
+            'volumeto': 'volume'
+        })
+        df = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
+        return df
+    except Exception as e:
+        st.error(f"CryptoCompare API error: {e}")
         return None
 
 # Calculate indicators: SMA, RSI, MACD, Bollinger Bands
@@ -196,8 +231,12 @@ elif asset_type == "Forex":
 
 elif asset_type == "Cryptocurrency":
     symbol = st.text_input("Enter Crypto Symbol (e.g., BTCUSDT)", "BTCUSDT")
+    data_source = st.selectbox("Select Crypto Data Source", ["Binance", "CryptoCompare"])
     if st.button("Fetch and Plot"):
-        df = fetch_crypto_data(symbol)
+        if data_source == "Binance":
+            df = fetch_crypto_data_binance(symbol)
+        else:
+            df = fetch_crypto_data_cryptocompare(symbol)
         if df is not None:
             df = add_technical_indicators(df)
             plot_chart_with_indicators(df, title=f"{symbol.upper()} Crypto Price")
