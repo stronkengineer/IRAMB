@@ -621,7 +621,7 @@ def plot_price_chart(symbol, current_price):
 
     fig.add_trace(
         go.Bar(
-            x=df["time"], y=df["volume"], name=t("Volume", "الحجم"),
+            x=df["time"], y=df["No. of assets traded"], name=t("Volume", "الحجم"),
             marker=dict(color='royalblue')
         ),
         row=2, col=1
@@ -673,7 +673,7 @@ def plot_candlestick_chart(symbol, current_price):
         "high": [current_price * (1 + 0.01 * random.random()) for _ in range(60)],
         "low": [current_price * (1 - 0.01 * random.random()) for _ in range(60)],
         "close": [current_price * (1 + 0.005 * (random.random() - 0.5)) for _ in range(60)],
-        "volume": [random.randint(100, 500) for _ in range(60)]
+        "No. of assets traded": [random.randint(100, 500) for _ in range(60)]
     })
 
     fig = go.Figure(
