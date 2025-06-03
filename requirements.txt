@@ -2,8 +2,7 @@ streamlit
 pandas
 plotly
 python-dotenv
-python-binance
-tradingview-ta
+tradingview_ta
 pymongo
 requests
 alpaca-trade-api
@@ -11,5 +10,6 @@ vaderSentiment
 beautifulsoup4
 numpy
 scipy
+yfinance
 python-binance==1.0.15
 cryptography>=38.0.0
