@@ -621,7 +621,7 @@ def plot_price_chart(symbol, current_price):
 
     fig.add_trace(
         go.Bar(
-            x=df["time"], y=df["No. of assets traded"], name=t("Volume", "الحجم"),
+            x=df["time"], y=df["volume"], name=t("No of assets traded", "الحجم"),
             marker=dict(color='royalblue')
         ),
         row=2, col=1
@@ -637,7 +637,7 @@ def plot_price_chart(symbol, current_price):
         price_level = df["price"].iloc[idx]
         fig.add_hline(
             y=price_level, line_dash="dash", line_color="limegreen",
-            annotation_text=t("Support", "دعم"), annotation_position="bottom right",
+            annotation_text=t("", "دعم"), annotation_position="bottom right",
             row=1, col=1, line_width=1.5
         )
 
@@ -646,7 +646,7 @@ def plot_price_chart(symbol, current_price):
         price_level = df["price"].iloc[idx]
         fig.add_hline(
             y=price_level, line_dash="dash", line_color="orangered",
-            annotation_text=t("Resistance", "مقاومة"), annotation_position="top right",
+            annotation_text=t("", "مقاومة"), annotation_position="top right",
             row=1, col=1, line_width=1.5
         )
 
@@ -673,7 +673,7 @@ def plot_candlestick_chart(symbol, current_price):
         "high": [current_price * (1 + 0.01 * random.random()) for _ in range(60)],
         "low": [current_price * (1 - 0.01 * random.random()) for _ in range(60)],
         "close": [current_price * (1 + 0.005 * (random.random() - 0.5)) for _ in range(60)],
-        "No. of assets traded": [random.randint(100, 500) for _ in range(60)]
+        "volume": [random.randint(100, 500) for _ in range(60)]
     })
 
     fig = go.Figure(
@@ -694,7 +694,7 @@ def plot_candlestick_chart(symbol, current_price):
         price_level = df['close'].iloc[idx]
         fig.add_hline(
             y=price_level, line_dash="dash", line_color="limegreen",
-            annotation_text=t("Support", "دعم"), annotation_position="bottom right",
+            annotation_text=t("", "دعم"), annotation_position="bottom right",
             line_width=1.5
         )
 
@@ -702,7 +702,7 @@ def plot_candlestick_chart(symbol, current_price):
         price_level = df['close'].iloc[idx]
         fig.add_hline(
             y=price_level, line_dash="dash", line_color="orangered",
-            annotation_text=t("Resistance", "مقاومة"), annotation_position="top right",
+            annotation_text=t("", "مقاومة"), annotation_position="top right",
             line_width=1.5
         )
 
