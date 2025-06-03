@@ -722,7 +722,7 @@ if trades:
         color = 'green' if val == "BUY" else 'red' if val == "SELL" else 'black'
         return f'color: {color}; font-weight: bold'
 
-    styled_df = display_df.style.applymap(highlight_side, subset=["Side"])
+    styled_df = display_df.style.map(highlight_side, subset=["Side"])
 
     st.dataframe(styled_df, use_container_width=True)
 else:
