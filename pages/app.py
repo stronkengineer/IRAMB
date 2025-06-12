@@ -737,6 +737,7 @@ def show_all_symbols_visuals():
                     st.warning(t(f"No price data available for {symbol}",
                                  f"لا تتوفر بيانات السعر لـ {symbol}"))
 # ...existing code...
+show_all_symbols_visuals()
 
 st.header(t("Recent Trades", "الصفقات الأخيرة"))
 
