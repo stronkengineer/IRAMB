@@ -29,6 +29,13 @@ import yfinance as yf
 from scipy.signal import argrelextrema
 from auth import IGAuthenticator
 
+if not st.session_state.get("logged_in"):
+    st.warning("🔐 Please log in first via the Home page.")
+    st.stop()
+
+st.title("📊 Main Dashboard")
+st.write(f"Hello, {st.session_state.username}!")
+
 # --- Load environment variables ---
 load_dotenv(".env")
 MONGO_URI = os.getenv("MONGO_URI")
