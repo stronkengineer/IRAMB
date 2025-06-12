@@ -58,19 +58,25 @@ st.sidebar.header("User Authentication")
 
 # --- Binance API ---
 use_binance = st.sidebar.checkbox("Use Binance", value=False)
-use_testnet = st.sidebar.checkbox("Use Binance Testnet", value=False)  # NEW
+use_testnet = st.sidebar.checkbox("Use Binance Testnet", value=False)
 
-api_key_binance, api_secret_binance = None, None
 client = None
+api_key_binance, api_secret_binance = None, None
 
 if use_binance:
-    api_key_binance = st.sidebar.text_input("Binance API Key", type="password")
-    api_secret_binance = st.sidebar.text_input("Binance API Secret", type="password")
+    if use_testnet:
+        st.sidebar.markdown("### 🔧 Testnet API Credentials")
+        api_key_binance = st.sidebar.text_input("Testnet API Key", type="password")
+        api_secret_binance = st.sidebar.text_input("Testnet API Secret", type="password")
+    else:
+        st.sidebar.markdown("### 🔐 Live API Credentials")
+        api_key_binance = st.sidebar.text_input("Live API Key", type="password")
+        api_secret_binance = st.sidebar.text_input("Live API Secret", type="password")
 
     if api_key_binance and api_secret_binance:
         user_binance = user_collection.find_one({
             "api_key_binance": api_key_binance,
-            "is_testnet": use_testnet  # Ensure credentials are scoped by testnet/live
+            "is_testnet": use_testnet
         })
 
         if not user_binance:
@@ -79,20 +85,20 @@ if use_binance:
                 "api_secret_binance": api_secret_binance,
                 "is_testnet": use_testnet
             })
-            st.sidebar.success("Binance API credentials saved.")
+            st.sidebar.success("✅ API credentials saved.")
 
         # Initialize Binance client
         client = Client(api_key=api_key_binance, api_secret=api_secret_binance)
 
-        # Point to testnet endpoint if selected
+        # Use Testnet endpoint if selected
         if use_testnet:
-            client.API_URL = 'https://testnet.binance.vision/api'
+            client.API_URL = "https://testnet.binance.vision/api"
             st.sidebar.success("Connected to Binance Testnet ✅")
         else:
             st.sidebar.success("Connected to Binance Live ✅")
-
     else:
-        st.sidebar.warning("Please enter your Binance API credentials.")
+        st.sidebar.warning("⚠️ Please enter your Binance API credentials.")
+
 # --- Alpaca API ---
 use_alpaca = st.sidebar.checkbox("Use Alpaca", value=False)
 api_key_alpaca, api_secret_alpaca = None, None
