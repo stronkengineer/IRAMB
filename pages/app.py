@@ -623,25 +623,47 @@ if st.button("Stop Trading Bot"):
 # --- Visualization helpers ---
 
 
-def plot_price_chart(symbol, current_price):
-    timestamps = pd.date_range(end=pd.Timestamp.now(), periods=60, freq='T')
-    prices = [current_price * (1 + 0.005 * (random.random() - 0.5)) for _ in range(60)]
-    df = pd.DataFrame({"time": timestamps, "price": prices})
+def fetch_historical_prices(symbol, category):
+    try:
+        if category == "crypto":
+            # Try yfinance for crypto (e.g., BTC-USD)
+            yf_symbol = symbol.replace("USDT", "-USD") if symbol.endswith("USDT") else symbol
+            data = yf.Ticker(yf_symbol).history(period="1d", interval="1m")
+        elif category == "stocks":
+            data = yf.Ticker(symbol).history(period="1d", interval="1m")
+        elif category == "forex":
+            yf_symbol = symbol + "=X"
+            data = yf.Ticker(yf_symbol).history(period="1d", interval="1m")
+        elif category == "commodities":
+            yf_map = {"GOLD": "GC=F", "SILVER": "SI=F", "OIL": "CL=F"}
+            yf_symbol = yf_map.get(symbol.upper(), symbol)
+            data = yf.Ticker(yf_symbol).history(period="1d", interval="1m")
+        else:
+            return None
+        if data.empty:
+            return None
+        data = data.reset_index()
+        return data
+    except Exception as e:
+        print(f"Error fetching historical prices for {symbol}: {e}")
+        return None
 
-    fig = make_subplots(
-        rows=1, cols=1,
-        subplot_titles=(t("Price Chart", "مخطط السعر"),)
-    )
-
+def plot_price_chart(symbol, current_price, category):
+    df = fetch_historical_prices(symbol, category)
+    if df is None or df.empty:
+        st.warning(f"No historical data for {symbol}")
+        return go.Figure()
+    fig = make_subplots(rows=1, cols=1, subplot_titles=(t("Price Chart", "مخطط السعر"),))
     fig.add_trace(
         go.Scatter(
-            x=df["time"], y=df["price"], mode='lines',
+            x=df["Datetime"] if "Datetime" in df else df["Date"],
+            y=df["Close"],
+            mode='lines',
             line=dict(color='deepskyblue', width=2),
             name=t("Price", "السعر")
         ),
         row=1, col=1
     )
-
     fig.update_layout(
         height=400,
         title_text=f"{t('Live Data', 'البيانات الحية')} - {symbol}",
@@ -653,29 +675,22 @@ def plot_price_chart(symbol, current_price):
         margin=dict(t=50, b=40),
         legend=dict(bgcolor='rgba(0,0,0,0)', bordercolor='gray')
     )
-
     return fig
 
-def plot_candlestick_chart(symbol, current_price):
-    timestamps = pd.date_range(end=pd.Timestamp.now(), periods=60, freq='T')
-    df = pd.DataFrame({
-        "time": timestamps,
-        "open": [current_price * (1 + 0.005 * (random.random() - 0.5)) for _ in range(60)],
-        "high": [current_price * (1 + 0.01 * random.random()) for _ in range(60)],
-        "low": [current_price * (1 - 0.01 * random.random()) for _ in range(60)],
-        "close": [current_price * (1 + 0.005 * (random.random() - 0.5)) for _ in range(60)]
-    })
-
+def plot_candlestick_chart(symbol, current_price, category):
+    df = fetch_historical_prices(symbol, category)
+    if df is None or df.empty:
+        st.warning(f"No historical data for {symbol}")
+        return go.Figure()
     fig = go.Figure(
         data=[go.Candlestick(
-            x=df["time"],
-            open=df["open"], high=df["high"],
-            low=df["low"], close=df["close"],
+            x=df["Datetime"] if "Datetime" in df else df["Date"],
+            open=df["Open"], high=df["High"],
+            low=df["Low"], close=df["Close"],
             name=t("Candlesticks", "الشموع"),
             increasing_line_color='lime', decreasing_line_color='red'
         )]
     )
-
     fig.update_layout(
         title=f"{t('Candlestick Chart', 'مخطط الشموع')} - {symbol}",
         xaxis_title=t("Time", "الوقت"),
@@ -687,7 +702,6 @@ def plot_candlestick_chart(symbol, current_price):
         xaxis=dict(color='white'),
         yaxis=dict(color='white')
     )
-
     return fig
 
 def show_all_symbols_visuals():
