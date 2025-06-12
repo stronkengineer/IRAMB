@@ -4,26 +4,18 @@ import pymongo
 import os
 from dotenv import load_dotenv
 
-
-
-st.title("📊 Main Dashboard")
-st.write(f"Hello, {st.session_state.username}!")
-
-# Load environment variables
+# --- Load environment variables and connect to MongoDB ---
 load_dotenv(".env")
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = os.getenv("DB_NAME")
-
-# Connect to MongoDB
 client = pymongo.MongoClient(MONGO_URI)
 db = client[DB_NAME]
 users = db["users"]
 
-# Language selection
+# --- Language selection and translations ---
 language = st.sidebar.selectbox("🌐 Language", ["English", "العربية"])
 is_ar = language == "العربية"
 
-# Translations
 T = {
     "title": "🔐 تسجيل الدخول / إنشاء حساب" if is_ar else "🔐 Login / Sign Up",
     "login_tab": "تسجيل الدخول" if is_ar else "Login",
@@ -41,13 +33,13 @@ T = {
     "logout": "تسجيل الخروج" if is_ar else "Logout"
 }
 
-# Session state
+# --- Session state initialization ---
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "username" not in st.session_state:
     st.session_state.username = ""
 
-# Auth logic
+# --- Authentication logic ---
 def login(username, password):
     user = users.find_one({"username": username})
     if user and bcrypt.checkpw(password.encode(), user["password"]):
@@ -63,15 +55,15 @@ def signup(username, password):
     users.insert_one({"username": username, "password": hashed_pw})
     return True
 
-# UI
+# --- UI ---
 st.title(T["title"])
 
 if not st.session_state.logged_in:
     tab1, tab2 = st.tabs([T["login_tab"], T["signup_tab"]])
 
     with tab1:
-        username = st.text_input(T["username"])
-        password = st.text_input(T["password"], type="password")
+        username = st.text_input(T["username"], key="login_username")
+        password = st.text_input(T["password"], type="password", key="login_password")
         if st.button(T["login_tab"]):
             if login(username, password):
                 st.success(T["login_success"])
@@ -79,8 +71,8 @@ if not st.session_state.logged_in:
                 st.error(T["login_fail"])
 
     with tab2:
-        new_user = st.text_input(T["new_username"])
-        new_pass = st.text_input(T["new_password"], type="password")
+        new_user = st.text_input(T["new_username"], key="signup_username")
+        new_pass = st.text_input(T["new_password"], type="password", key="signup_password")
         if st.button(T["signup_tab"]):
             if signup(new_user, new_pass):
                 st.success(T["signup_success"])
