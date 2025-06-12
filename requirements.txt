@@ -12,5 +12,6 @@ numpy
 scipy
 yfinance
 alpha_vantage
+bcrypt
 python-binance
 cryptography>=38.0.0
