@@ -10,6 +10,13 @@ from alpha_vantage.techindicators import TechIndicators
 from binance.client import Client
 import yfinance as yf
 
+if not st.session_state.get("logged_in"):
+    st.warning("🔐 Please log in first via the Home page.")
+    st.stop()
+
+st.title("📊 Chart")
+st.write(f"Hello, {st.session_state.username}!")
+
 # Your API keys here
 ALPHA_VANTAGE_KEY = "B6762CER4FORROBH"
 FMP_API_KEY = "gzoC7P7Ly3pWMoKHgLc1hXkPq7kMOafk"
