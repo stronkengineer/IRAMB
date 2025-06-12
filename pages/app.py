@@ -704,6 +704,7 @@ def plot_candlestick_chart(symbol, current_price, category):
     )
     return fig
 
+# ...existing code...
 def show_all_symbols_visuals():
     st.header(t("Live Price Visualizations for All Symbols", "مخططات الأسعار الحية لجميع الرموز"))
     for category, symbols in SYMBOLS.items():
@@ -714,10 +715,10 @@ def show_all_symbols_visuals():
                     st.subheader(symbol)
 
                     # 🌟 Show Line + Volume Chart
-                    st.plotly_chart(plot_price_chart(symbol, price), use_container_width=True)
+                    st.plotly_chart(plot_price_chart(symbol, price, category), use_container_width=True)
 
                     # 🌟 Show Candlestick Chart
-                    st.plotly_chart(plot_candlestick_chart(symbol, price), use_container_width=True)
+                    st.plotly_chart(plot_candlestick_chart(symbol, price, category), use_container_width=True)
 
                     # 🌟 Trade Signals
                     do_trade, direction, _ = should_trade(symbol, category)
@@ -735,13 +736,7 @@ def show_all_symbols_visuals():
                 else:
                     st.warning(t(f"No price data available for {symbol}",
                                  f"لا تتوفر بيانات السعر لـ {symbol}"))
-# --- Main UI ---
-st.title(t("Multi-Asset AI Trading Bot", "بوت التداول الذكي متعدد الأصول"))
-st.write(t("Trading algorithm:", "خوارزمية التداول:"), selected_algo)
-
-# Show live visuals with signals and sentiment
-show_all_symbols_visuals()
-
+# ...existing code...
 
 st.header(t("Recent Trades", "الصفقات الأخيرة"))
 
