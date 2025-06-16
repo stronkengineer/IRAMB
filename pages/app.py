@@ -551,23 +551,38 @@ def trading_bot(status_area):
                         status_area.text(f"Invalid signal {signal} for {symbol}, skipping.")
                         continue
 
+                    # --- Use sidebar controls for trade size and risk ---
                     if category == "crypto":
                         if not client:
                             status_area.text("Binance client not initialized, skipping crypto trade.")
                             continue
                         balance = client.account().get("balances", [])
-                        asset = symbol[:-4]
-                        asset_balance = next((b for b in balance if b.get("asset") == asset), None)
-                        if not asset_balance:
-                            status_area.text(f"No balance found for asset {asset}")
-                        qty = 0.001  # TODO: improve qty calc
+                        usdt_balance = next((b for b in balance if b.get("asset") == "USDT"), None)
+                        if not usdt_balance or float(usdt_balance.get("free", 0)) <= 0:
+                            status_area.text(f"No USDT balance available for trading {symbol}")
+                            continue
+                        trade_usdt = float(usdt_balance["free"]) * TRADE_PERCENT
+                        qty = round(trade_usdt / price, 6)
+                        if qty <= 0:
+                            status_area.text(f"Calculated quantity is zero for {symbol}, skipping.")
+                            continue
+
+                        # Calculate stop loss and take profit prices
+                        stop_loss_price = price * (1 - STOP_LOSS_PERCENT) if signal.upper() == "BUY" else price * (1 + STOP_LOSS_PERCENT)
+                        take_profit_price = price * (1 + TAKE_PROFIT_PERCENT) if signal.upper() == "BUY" else price * (1 - TAKE_PROFIT_PERCENT)
+
+                        # Place order (expand to use stop loss/take profit if supported)
                         place_order(symbol, signal.upper(), qty, category)
+                        # You can add logic here to place OCO/stop-limit orders if your exchange supports it
 
                     elif category == "stocks":
                         if not alpaca:
                             status_area.text("Alpaca client not initialized, skipping stock trade.")
                             continue
-                        qty = 1
+                        account = alpaca.get_account()
+                        cash = float(account.cash)
+                        trade_cash = cash * TRADE_PERCENT
+                        qty = max(1, int(trade_cash / price))
                         place_order(symbol, signal.upper(), qty, category)
 
                     elif category == "forex":
@@ -579,7 +594,7 @@ def trading_bot(status_area):
                         if not epic:
                             status_area.text(f"No IG epic mapping found for forex symbol: {symbol}")
                             continue
-                        qty = 1000
+                        qty = 1000  # You can use TRADE_PERCENT logic if you have balance info
                         place_order(epic, signal.upper(), qty, category)
 
                     else:
@@ -759,6 +774,7 @@ show_all_symbols_visuals()
 st.header(t("Recent Trades", "الصفقات الأخيرة"))
 
 # Fetch latest 10 trades from the database
+trade_collection = db["trade_history"]
 trades = list(trade_collection.find().sort("timestamp", -1).limit(10))
 
 if trades:
