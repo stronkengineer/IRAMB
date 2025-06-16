@@ -286,9 +286,8 @@ import requests
 import time
 
 API_NINJAS_KEY = 'zRmrQxu5V3uueK/Ws/F/tA==PZTRPDW7AxpoAyhA'
-price_cache = {}
-CACHE_EXPIRY = 300  # seconds
 
+@st.cache_data(ttl=300, show_spinner=False)
 def get_price(symbol):
     try:
         if symbol in SYMBOLS["crypto"]:
@@ -307,18 +306,11 @@ def get_price(symbol):
             return float(analysis.indicators["close"])
 
         elif symbol in SYMBOLS["commodities"]:
-            now = time.time()
-            if symbol in price_cache:
-                cached_price, timestamp = price_cache[symbol]
-                if now - timestamp < CACHE_EXPIRY:
-                    return cached_price
-
-            # Extended commodity mapping with source and symbol/id
             commodity_source_map = {
                 "GOLD": {"source": "api_ninjas", "id": "gold"},
                 "SILVER": {"source": "yfinance", "id": "SI=F"},
                 "OIL": {"source": "yfinance", "id": "CL=F"},
-                "NATGAS": {"source": "yfinance", "id": "NG=F"},          # Natural Gas
+                "NATGAS": {"source": "yfinance", "id": "NG=F"},
                 "COPPER": {"source": "api_ninjas", "id": "copper"},
                 "PLATINUM": {"source": "api_ninjas", "id": "platinum"},
                 "PALLADIUM": {"source": "api_ninjas", "id": "palladium"},
@@ -331,48 +323,47 @@ def get_price(symbol):
 
             info = commodity_source_map.get(symbol.upper())
             if not info:
-                print(f"Unsupported commodity symbol: {symbol}")
+                st.warning(f"Unsupported commodity symbol: {symbol}")
                 return None
 
             if info["source"] == "yfinance":
                 try:
                     data = yf.Ticker(info["id"]).history(period="1d")
                     if not data.empty:
-                        price = data["Close"].iloc[-1]
-                        price_cache[symbol] = (price, now)
-                        return float(price)
+                        return float(data["Close"].iloc[-1])
                     else:
-                        print(f"No data found in yfinance for {symbol}")
+                        st.warning(f"No data found in yfinance for {symbol}")
                         return None
                 except Exception as e:
-                    print(f"yfinance error for {symbol}: {e}")
+                    st.warning(f"yfinance error for {symbol}: {e}")
                     return None
 
             elif info["source"] == "api_ninjas":
-                url = f"https://api.api-ninjas.com/v1/commodityprice?name={info['id']}"
-                headers = {'X-Api-Key': API_NINJAS_KEY}
-                response = requests.get(url, headers=headers)
-                if response.status_code == 200:
-                    data = response.json()
-                    price = data.get("price")
-                    if price is not None:
-                        price_cache[symbol] = (price, now)
-                        return float(price)
+                try:
+                    url = f"https://api.api-ninjas.com/v1/commodityprice?name={info['id']}"
+                    headers = {'X-Api-Key': API_NINJAS_KEY}
+                    response = requests.get(url, headers=headers)
+                    if response.status_code == 200:
+                        data = response.json()
+                        price = data.get("price")
+                        if price is not None:
+                            return float(price)
+                        else:
+                            st.warning(f"No price in API response for {symbol}")
+                            return None
                     else:
-                        print(f"No price in API response for {symbol}")
+                        st.warning(f"API error for {symbol}: {response.status_code} {response.text}")
                         return None
-                else:
-                    print(f"API error for {symbol}: {response.status_code} {response.text}")
+                except Exception as e:
+                    st.warning(f"API Ninjas error for {symbol}: {e}")
                     return None
 
         else:
             return None
 
     except Exception as e:
-        print(f"Price fetch error for {symbol}: {e}")
+        st.warning(f"Price fetch error for {symbol}: {e}")
         return None
-
-
 
 # --- TradingView signal ---
 INTERVAL = "1d"  # or whatever interval you want
@@ -630,10 +621,10 @@ if st.button("Stop Trading Bot"):
 # --- Visualization helpers ---
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_historical_prices(symbol, category):
     try:
         if category == "crypto":
-            # Try yfinance for crypto (e.g., BTC-USD)
             yf_symbol = symbol.replace("USDT", "-USD") if symbol.endswith("USDT") else symbol
             data = yf.Ticker(yf_symbol).history(period="1d", interval="1m")
         elif category == "stocks":
@@ -652,18 +643,27 @@ def fetch_historical_prices(symbol, category):
         data = data.reset_index()
         return data
     except Exception as e:
-        print(f"Error fetching historical prices for {symbol}: {e}")
+        st.warning(f"Error fetching historical prices for {symbol}: {e}")
         return None
+
+def get_time_col(df):
+    for col in ["Datetime", "Date", "time"]:
+        if col in df.columns:
+            return col
+    return df.columns[0]
 
 def plot_price_chart(symbol, current_price, category):
     df = fetch_historical_prices(symbol, category)
     if df is None or df.empty:
         st.warning(f"No historical data for {symbol}")
         return go.Figure()
-    fig = make_subplots(rows=1, cols=1, subplot_titles=(t("Price Chart", "مخطط السعر"),))
+    time_col = get_time_col(df)
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                        row_heights=[0.7, 0.3], vertical_spacing=0.05,
+                        subplot_titles=(t("Price Chart", "مخطط السعر"), t("Volume", "الحجم")))
     fig.add_trace(
         go.Scatter(
-            x=df["Datetime"] if "Datetime" in df else df["Date"],
+            x=df[time_col],
             y=df["Close"],
             mode='lines',
             line=dict(color='deepskyblue', width=2),
@@ -671,8 +671,18 @@ def plot_price_chart(symbol, current_price, category):
         ),
         row=1, col=1
     )
+    if "Volume" in df.columns:
+        fig.add_trace(
+            go.Bar(
+                x=df[time_col],
+                y=df["Volume"],
+                marker_color='gray',
+                name=t("Volume", "الحجم")
+            ),
+            row=2, col=1
+        )
     fig.update_layout(
-        height=400,
+        height=500,
         title_text=f"{t('Live Data', 'البيانات الحية')} - {symbol}",
         xaxis=dict(color='white'),
         yaxis=dict(color='white'),
@@ -689,9 +699,10 @@ def plot_candlestick_chart(symbol, current_price, category):
     if df is None or df.empty:
         st.warning(f"No historical data for {symbol}")
         return go.Figure()
+    time_col = get_time_col(df)
     fig = go.Figure(
         data=[go.Candlestick(
-            x=df["Datetime"] if "Datetime" in df else df["Date"],
+            x=df[time_col],
             open=df["Open"], high=df["High"],
             low=df["Low"], close=df["Close"],
             name=t("Candlesticks", "الشموع"),
@@ -710,7 +721,6 @@ def plot_candlestick_chart(symbol, current_price, category):
         yaxis=dict(color='white')
     )
     return fig
-
 # ...existing code...
 def show_all_symbols_visuals():
     st.header(t("Live Price Visualizations for All Symbols", "مخططات الأسعار الحية لجميع الرموز"))
