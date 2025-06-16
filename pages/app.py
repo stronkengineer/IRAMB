@@ -526,10 +526,70 @@ def should_trade(symbol, category):
     return algo_trade, direction, price
 
 # --- Trading Bot Thread ---
+# --- In-memory state for open positions and daily loss ---
+if "open_positions" not in st.session_state:
+    st.session_state.open_positions = {}
+if "daily_loss" not in st.session_state:
+    st.session_state.daily_loss = 0
+if "last_trade_time" not in st.session_state:
+    st.session_state.last_trade_time = {}
+
+DAILY_LOSS_LIMIT = st.sidebar.number_input("Daily Loss Limit ($)", min_value=10, value=100)
+TRADE_COOLDOWN = st.sidebar.number_input("Trade Cooldown (seconds)", min_value=10, value=60)
+
 stop_bot = threading.Event()
 
 def trading_bot(status_area):
     while not stop_bot.is_set():
+        # --- Enforce SL/TP for all open positions ---
+        to_close = []
+        for pos_key, pos in list(st.session_state.open_positions.items()):
+            symbol = pos_key.split(":", 1)[1]
+            category = pos_key.split(":", 1)[0]
+            current_price = get_price(symbol)
+            if current_price is None:
+                continue
+            sl = pos.get("stop_loss_price")
+            tp = pos.get("take_profit_price")
+            side = pos["side"]
+            qty = pos["qty"]
+
+            # Check SL/TP hit
+            if side == "BUY":
+                if current_price <= sl:
+                    status_area.text(f"{symbol} ({category}): Stop loss hit at {current_price:.2f}. Closing position.")
+                    pnl = (current_price - pos["entry_price"]) * qty
+                    realized_loss = -pnl if pnl < 0 else 0
+                    st.session_state.daily_loss += realized_loss
+                    place_order(symbol, "SELL", qty, category)
+                    to_close.append(pos_key)
+                elif current_price >= tp:
+                    status_area.text(f"{symbol} ({category}): Take profit hit at {current_price:.2f}. Closing position.")
+                    pnl = (current_price - pos["entry_price"]) * qty
+                    realized_loss = -pnl if pnl < 0 else 0
+                    st.session_state.daily_loss += realized_loss
+                    place_order(symbol, "SELL", qty, category)
+                    to_close.append(pos_key)
+            elif side == "SELL":
+                if current_price >= sl:
+                    status_area.text(f"{symbol} ({category}): Stop loss hit at {current_price:.2f}. Closing position.")
+                    pnl = (pos["entry_price"] - current_price) * qty
+                    realized_loss = -pnl if pnl < 0 else 0
+                    st.session_state.daily_loss += realized_loss
+                    place_order(symbol, "BUY", qty, category)
+                    to_close.append(pos_key)
+                elif current_price <= tp:
+                    status_area.text(f"{symbol} ({category}): Take profit hit at {current_price:.2f}. Closing position.")
+                    pnl = (pos["entry_price"] - current_price) * qty
+                    realized_loss = -pnl if pnl < 0 else 0
+                    st.session_state.daily_loss += realized_loss
+                    place_order(symbol, "BUY", qty, category)
+                    to_close.append(pos_key)
+
+        # Remove closed positions
+        for pos_key in to_close:
+            del st.session_state.open_positions[pos_key]
+
         for category, symbols in SYMBOLS.items():
             if not symbols:
                 status_area.text(f"No symbols found for category {category}, skipping.")
@@ -541,6 +601,13 @@ def trading_bot(status_area):
                         status_area.text(f"Invalid symbol: {symbol} in category {category}, skipping.")
                         continue
 
+                    # --- Trade cooldown logic ---
+                    now = time.time()
+                    pos_key = f"{category}:{symbol}"
+                    last_time = st.session_state.last_trade_time.get(pos_key)
+                    if last_time and now - last_time < TRADE_COOLDOWN:
+                        continue  # skip if within cooldown
+
                     do_trade, signal, price = should_trade(symbol, category)
                     if not do_trade:
                         continue
@@ -551,7 +618,20 @@ def trading_bot(status_area):
                         status_area.text(f"Invalid signal {signal} for {symbol}, skipping.")
                         continue
 
-                    # --- Use sidebar controls for trade size and risk ---
+                    realized_loss = 0
+                    pos = st.session_state.open_positions.get(pos_key)
+
+                    # --- PnL tracking: close previous position if direction changes ---
+                    if pos and pos["side"] != signal.upper():
+                        if pos["side"] == "BUY":
+                            pnl = (price - pos["entry_price"]) * pos["qty"]
+                        else:  # "SELL"
+                            pnl = (pos["entry_price"] - price) * pos["qty"]
+                        realized_loss = -pnl if pnl < 0 else 0  # Only count losses
+                        st.session_state.daily_loss += realized_loss
+                        del st.session_state.open_positions[pos_key]
+
+                    # --- Open new position and calculate SL/TP ---
                     if category == "crypto":
                         if not client:
                             status_area.text("Binance client not initialized, skipping crypto trade.")
@@ -567,14 +647,6 @@ def trading_bot(status_area):
                             status_area.text(f"Calculated quantity is zero for {symbol}, skipping.")
                             continue
 
-                        # Calculate stop loss and take profit prices
-                        stop_loss_price = price * (1 - STOP_LOSS_PERCENT) if signal.upper() == "BUY" else price * (1 + STOP_LOSS_PERCENT)
-                        take_profit_price = price * (1 + TAKE_PROFIT_PERCENT) if signal.upper() == "BUY" else price * (1 - TAKE_PROFIT_PERCENT)
-
-                        # Place order (expand to use stop loss/take profit if supported)
-                        place_order(symbol, signal.upper(), qty, category)
-                        # You can add logic here to place OCO/stop-limit orders if your exchange supports it
-
                     elif category == "stocks":
                         if not alpaca:
                             status_area.text("Alpaca client not initialized, skipping stock trade.")
@@ -583,7 +655,6 @@ def trading_bot(status_area):
                         cash = float(account.cash)
                         trade_cash = cash * TRADE_PERCENT
                         qty = max(1, int(trade_cash / price))
-                        place_order(symbol, signal.upper(), qty, category)
 
                     elif category == "forex":
                         if not igClient:
@@ -594,16 +665,62 @@ def trading_bot(status_area):
                         if not epic:
                             status_area.text(f"No IG epic mapping found for forex symbol: {symbol}")
                             continue
-                        qty = 1000  # You can use TRADE_PERCENT logic if you have balance info
-                        place_order(epic, signal.upper(), qty, category)
+                        qty = 1000  # Or use your own logic
+
+                    elif category == "commodities":
+                        qty = 1  # Or your logic for commodity contract size
 
                     else:
                         status_area.text(f"Category '{category}' not handled for trading.")
+                        continue
 
-                    status_area.text(f"Traded {symbol} ({category}): Signal {signal}, Price {price}")
+                    # Calculate stop loss and take profit prices (for display/logging)
+                    stop_loss_price = price * (1 - STOP_LOSS_PERCENT) if signal.upper() == "BUY" else price * (1 + STOP_LOSS_PERCENT)
+                    take_profit_price = price * (1 + TAKE_PROFIT_PERCENT) if signal.upper() == "BUY" else price * (1 - TAKE_PROFIT_PERCENT)
+
+                    # --- Save new open position (including SL/TP for future use) ---
+                    st.session_state.open_positions[pos_key] = {
+                        "side": signal.upper(),
+                        "entry_price": price,
+                        "qty": qty,
+                        "timestamp": now,
+                        "stop_loss_price": stop_loss_price,
+                        "take_profit_price": take_profit_price
+                    }
+
+                    # --- Place order ---
+                    if category == "crypto":
+                        place_order(symbol, signal.upper(), qty, category)
+                    elif category == "stocks":
+                        place_order(symbol, signal.upper(), qty, category)
+                    elif category == "forex":
+                        place_order(epic, signal.upper(), qty, category)
+                    elif category == "commodities":
+                        place_order(symbol, signal.upper(), qty, category)
+
+                    # --- Update cooldown ---
+                    st.session_state.last_trade_time[pos_key] = now
+
+                    # --- Status update ---
+                    status_area.text(
+                        f"Traded {symbol} ({category}): Signal {signal}, Price {price} | "
+                        f"SL: {stop_loss_price:.2f}, TP: {take_profit_price:.2f}, Daily Loss: {st.session_state.daily_loss:.2f}"
+                    )
+
+                    # --- Check daily loss limit ---
+                    if st.session_state.daily_loss >= DAILY_LOSS_LIMIT:
+                        status_area.text("Daily loss limit reached. Stopping trading.")
+                        stop_bot.set()
+                        break
 
                 except Exception as e:
                     status_area.text(f"Error trading {symbol} in {category}: {e}")
+                    db["trade_errors"].insert_one({
+                        "symbol": symbol,
+                        "category": category,
+                        "error": str(e),
+                        "timestamp": time.time()
+                    })
 
         time.sleep(CHECK_FREQUENCY)
 
@@ -773,12 +890,14 @@ show_all_symbols_visuals()
 
 st.header(t("Recent Trades", "الصفقات الأخيرة"))
 
-# Fetch latest 10 trades from the database
-trade_collection = db["trade_history"]
-trades = list(trade_collection.find().sort("timestamp", -1).limit(10))
+# Add a category filter for trades
+category_options = ["all", "crypto", "stocks", "forex", "commodities"]
+selected_category = st.selectbox("Show trades for category:", category_options)
+
+query = {} if selected_category == "all" else {"category": selected_category}
+trades = list(trade_collection.find(query).sort("timestamp", -1).limit(10))
 
 if trades:
-    # Convert to DataFrame and format columns
     df = pd.DataFrame(trades)
     df["Timestamp"] = pd.to_datetime(df["timestamp"], unit='s').dt.strftime("%Y-%m-%d %H:%M:%S")
     df["Side"] = df["side"].str.upper()
@@ -787,13 +906,11 @@ if trades:
 
     display_df = df[["Timestamp", "Symbol", "Side", "Quantity"]]
 
-    # Style BUY green, SELL red
     def highlight_side(val):
         color = 'green' if val == "BUY" else 'red' if val == "SELL" else 'black'
         return f'color: {color}; font-weight: bold'
 
     styled_df = display_df.style.map(highlight_side, subset=["Side"])
-
     st.dataframe(styled_df, use_container_width=True)
 else:
     st.info(t("No trades available.", "لا توجد صفقات متاحة."))
