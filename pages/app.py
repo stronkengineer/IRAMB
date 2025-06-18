@@ -190,6 +190,15 @@ DEFAULTS = {
     "commodities": ["GOLD", "SILVER", "OIL"]
 }
 
+target_prices = {}
+
+for category, symbols in DEFAULTS.items():
+    for symbol in symbols:
+        key = f"target_{category}_{symbol}"
+        target_prices[key] = st.sidebar.number_input(
+            f"Target Price for {symbol} ({category})", min_value=0.0, value=0.0, step=0.01
+        )
+
 def get_user_symbols():
     categories = ["crypto", "forex", "stocks", "commodities"]
     user_symbols = {}
@@ -541,7 +550,7 @@ stop_bot = threading.Event()
 
 def trading_bot(status_area):
     while not stop_bot.is_set():
-        # --- Enforce SL/TP for all open positions ---
+        # --- Enforce SL/TP/Target for all open positions ---
         to_close = []
         for pos_key, pos in list(st.session_state.open_positions.items()):
             symbol = pos_key.split(":", 1)[1]
@@ -580,6 +589,24 @@ def trading_bot(status_area):
                     to_close.append(pos_key)
                 elif current_price <= tp:
                     status_area.text(f"{symbol} ({category}): Take profit hit at {current_price:.2f}. Closing position.")
+                    pnl = (pos["entry_price"] - current_price) * qty
+                    realized_loss = -pnl if pnl < 0 else 0
+                    st.session_state.daily_loss += realized_loss
+                    place_order(symbol, "BUY", qty, category)
+                    to_close.append(pos_key)
+
+            # --- Target price enforcement ---
+            target_price = pos.get("target_price", 0.0)
+            if target_price > 0:
+                if side == "BUY" and current_price >= target_price:
+                    status_area.text(f"{symbol} ({category}): Target price {target_price:.2f} reached at {current_price:.2f}. Closing position.")
+                    pnl = (current_price - pos["entry_price"]) * qty
+                    realized_loss = -pnl if pnl < 0 else 0
+                    st.session_state.daily_loss += realized_loss
+                    place_order(symbol, "SELL", qty, category)
+                    to_close.append(pos_key)
+                elif side == "SELL" and current_price <= target_price:
+                    status_area.text(f"{symbol} ({category}): Target price {target_price:.2f} reached at {current_price:.2f}. Closing position.")
                     pnl = (pos["entry_price"] - current_price) * qty
                     realized_loss = -pnl if pnl < 0 else 0
                     st.session_state.daily_loss += realized_loss
@@ -631,7 +658,7 @@ def trading_bot(status_area):
                         st.session_state.daily_loss += realized_loss
                         del st.session_state.open_positions[pos_key]
 
-                    # --- Open new position and calculate SL/TP ---
+                    # --- Open new position and calculate SL/TP/Target ---
                     if category == "crypto":
                         if not client:
                             status_area.text("Binance client not initialized, skipping crypto trade.")
@@ -677,15 +704,18 @@ def trading_bot(status_area):
                     # Calculate stop loss and take profit prices (for display/logging)
                     stop_loss_price = price * (1 - STOP_LOSS_PERCENT) if signal.upper() == "BUY" else price * (1 + STOP_LOSS_PERCENT)
                     take_profit_price = price * (1 + TAKE_PROFIT_PERCENT) if signal.upper() == "BUY" else price * (1 - TAKE_PROFIT_PERCENT)
+                    target_key = f"target_{category}_{symbol}"
+                    target_price = target_prices.get(target_key, 0.0)
 
-                    # --- Save new open position (including SL/TP for future use) ---
+                    # --- Save new open position (including SL/TP and target price) ---
                     st.session_state.open_positions[pos_key] = {
                         "side": signal.upper(),
                         "entry_price": price,
                         "qty": qty,
                         "timestamp": now,
                         "stop_loss_price": stop_loss_price,
-                        "take_profit_price": take_profit_price
+                        "take_profit_price": take_profit_price,
+                        "target_price": target_price
                     }
 
                     # --- Place order ---
@@ -698,14 +728,21 @@ def trading_bot(status_area):
                     elif category == "commodities":
                         place_order(symbol, signal.upper(), qty, category)
 
-                    # --- Update cooldown ---
-                    st.session_state.last_trade_time[pos_key] = now
+                    # --- Calculate duration for status update ---
+                    open_time = now  # Position just opened
+                    duration_sec = 0
+                    hours, remainder = divmod(duration_sec, 3600)
+                    minutes, seconds = divmod(remainder, 60)
+                    duration_str = f"{hours}h {minutes}m {seconds}s"
 
                     # --- Status update ---
                     status_area.text(
                         f"Traded {symbol} ({category}): Signal {signal}, Price {price} | "
-                        f"SL: {stop_loss_price:.2f}, TP: {take_profit_price:.2f}, Daily Loss: {st.session_state.daily_loss:.2f}"
+                        f"SL: {stop_loss_price:.2f}, TP: {take_profit_price:.2f}, Target: {target_price:.2f}, Duration: {duration_str}, Daily Loss: {st.session_state.daily_loss:.2f}"
                     )
+
+                    # --- Update cooldown ---
+                    st.session_state.last_trade_time[pos_key] = now
 
                     # --- Check daily loss limit ---
                     if st.session_state.daily_loss >= DAILY_LOSS_LIMIT:
@@ -726,6 +763,25 @@ def trading_bot(status_area):
 
 # Streamlit app controls
 
+st.write("## Open Positions")
+for pos_key, pos in st.session_state.open_positions.items():
+    symbol = pos_key.split(":", 1)[1]
+    category = pos_key.split(":", 1)[0]
+    side = pos["side"]
+    entry = pos["entry_price"]
+    qty = pos["qty"]
+    open_time = pos.get("timestamp", None)
+    if open_time:
+        duration_sec = int(time.time() - open_time)
+        hours, remainder = divmod(duration_sec, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        duration_str = f"{hours}h {minutes}m {seconds}s"
+    else:
+        duration_str = "N/A"
+    st.write(
+        f"{symbol} ({category}) | {side} | Entry: {entry} | Qty: {qty} | Open for: {duration_str}"
+    )
+    
 st.title("Automated Trading Bot")
 
 status_area = st.empty()
