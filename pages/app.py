@@ -951,7 +951,7 @@ category_options = ["all", "crypto", "stocks", "forex", "commodities"]
 selected_category = st.selectbox("Show trades for category:", category_options)
 
 query = {} if selected_category == "all" else {"category": selected_category}
-trades = list(db["trades"].find().sort("timestamp", -1))
+trades = list(db["trade_history"].find().sort("timestamp", -1))
 if trades:
     df = pd.DataFrame(trades)
     df["Timestamp"] = pd.to_datetime(df["timestamp"], unit='s').dt.strftime("%Y-%m-%d %H:%M:%S")
