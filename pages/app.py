@@ -950,8 +950,9 @@ st.header(t("Recent Trades", "الصفقات الأخيرة"))
 category_options = ["all", "crypto", "stocks", "forex", "commodities"]
 selected_category = st.selectbox("Show trades for category:", category_options)
 
+# Use the trades_history collection and fetch the 10 most recent trades
 query = {} if selected_category == "all" else {"category": selected_category}
-trades = list(trade_collection.find(query).sort("timestamp", -1).limit(20))
+trades = list(db["trades_history"].find(query).sort("timestamp", -1).limit(10))
 
 if trades:
     df = pd.DataFrame(trades)
