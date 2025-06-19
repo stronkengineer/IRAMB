@@ -952,7 +952,7 @@ selected_category = st.selectbox("Show trades for category:", category_options)
 
 # Use the trades_history collection and fetch the 10 most recent trades
 query = {} if selected_category == "all" else {"category": selected_category}
-trades = list(db["trade_history"].find(query).sort("timestamp", -1).limit(10))
+trades = list(db["trade_history"].find(query).sort("timestamp", 1).limit(10))
 
 if trades:
     df = pd.DataFrame(trades)
