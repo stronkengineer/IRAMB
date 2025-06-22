@@ -950,12 +950,20 @@ st.header(t("Recent Trades", "الصفقات الأخيرة"))
 category_options = ["all", "crypto", "stocks", "forex", "commodities"]
 selected_category = st.selectbox("Show trades for category:", category_options)
 
-# Use the trades_history collection and fetch the 10 most recent trades
-query = {} if selected_category == "all" else {"category": selected_category}
-trades = list(db["trade_history"].find(query).sort("timestamp", 1).limit(10))
+# Normalize category for query
+query = {} if selected_category == "all" else {"category": selected_category.lower()}
+
+# Only fetch needed fields for efficiency
+projection = {"_id": 0, "timestamp": 1, "symbol": 1, "side": 1, "quantity": 1, "category": 1}
+trades_cursor = db["trade_history"].find(query, projection).sort("timestamp", -1).limit(20)
+trades = list(trades_cursor)
 
 if trades:
     df = pd.DataFrame(trades)
+    # Handle missing fields gracefully
+    for col in ["timestamp", "symbol", "side", "quantity"]:
+        if col not in df:
+            df[col] = ""
     df["Timestamp"] = pd.to_datetime(df["timestamp"], unit='s').dt.strftime("%Y-%m-%d %H:%M:%S")
     df["Side"] = df["side"].str.upper()
     df["Quantity"] = df["quantity"]
