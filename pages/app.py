@@ -384,6 +384,7 @@ commodity_tv_map = {
     # Add more commodities here as needed
 }
 
+@st.cache_data(ttl=300, show_spinner=False)
 def get_tradingview_signal(symbol, screener, category):  
     try:
         if category == "commodities":
@@ -433,54 +434,174 @@ if use_ig and igClient:
  ig_symbol_map= build_ig_symbol_map(igClient)
 
 # --- Place order ---
-def place_order(symbol, side, quantity, category):
-    order = {
-        "symbol": symbol,
-        "side": side,
-        "quantity": quantity,
-        "category": category,
-        "timestamp": time.time()
-    }
+def place_order(symbol, side, quantity, category, price=None, close=False):
+    now = time.time()
     try:
-        if category == "crypto" and client:
-            binance_order = client.new_order(symbol=symbol, side=side, type="MARKET", quantity=quantity)
-            order.update({"platform": "Binance", "binance_response": binance_order})
+        if not close:
+            # --- OPENING a trade ---
+            open_price = price
+            close_price = None
+            order = {
+                "symbol": symbol,
+                "side": side,
+                "quantity": quantity,
+                "category": category,
+                "timestamp": now,
+                "open_price": open_price,
+                "close_price": close_price,
+                "close_timestamp": None
+            }
+            if category == "crypto" and client:
+                binance_order = client.new_order(symbol=symbol, side=side, type="MARKET", quantity=quantity)
+                order.update({"platform": "Binance", "binance_response": binance_order})
+            elif category == "stocks" and alpaca:
+                alpaca_side = "buy" if side.upper() == "BUY" else "sell"
+                alpaca_order = alpaca.submit_order(
+                    symbol=symbol,
+                    qty=quantity,
+                    side=alpaca_side,
+                    type="market",
+                    time_in_force="gtc"
+                )
+                order.update({"platform": "Alpaca", "alpaca_id": alpaca_order.id})
+            elif category == "forex" and igClient:
+                epic = ig_symbol_map.get(symbol.upper(), symbol)
+                ig_direction = side.upper()
+                ig_response = igClient.place_order(
+                    epic=epic,
+                    size=quantity,
+                    direction=ig_direction,
+                    order_type='MARKET',
+                    currency_code='USD',
+                    expiry='DFB'
+                )
+                order.update({"platform": "IG", "ig_response": ig_response})
+            trade_collection.insert_one(order)
+            return order
 
-        elif category == "stocks" and alpaca:
-            alpaca_side = "buy" if side.upper() == "BUY" else "sell"
-            alpaca_order = alpaca.submit_order(
-                symbol=symbol,
-                qty=quantity,
-                side=alpaca_side,
-                type="market",
-                time_in_force="gtc"
-            )
-            order.update({"platform": "Alpaca", "alpaca_id": alpaca_order.id})
-
-        elif category == "forex" and igClient:
-            # Use your pre-built IG symbol->epic map here
-            epic = ig_symbol_map.get(symbol.upper(), symbol)  # convert symbol to epic if possible
-
-            ig_direction = side.upper()
-            ig_response = igClient.place_order(
-                epic=epic,
-                size=quantity,
-                direction=ig_direction,
-                order_type='MARKET',
-                currency_code='USD',
-                expiry='DFB'
-            )
-            order.update({"platform": "IG", "ig_response": ig_response})
-
-        # Insert order record in DB
-        trade_collection.insert_one(order)
-        return order
+        else:
+            # --- CLOSING a trade ---
+            close_price = price
+            # Find the most recent open trade for this symbol, opposite side, and category
+            open_trade = trade_collection.find_one({
+                "symbol": symbol,
+                "side": {"$ne": side},  # Opposite side
+                "category": category,
+                "close_price": None
+            }, sort=[("timestamp", -1)])
+            if open_trade:
+                trade_collection.update_one(
+                    {"_id": open_trade["_id"]},
+                    {"$set": {"close_price": close_price, "close_timestamp": now}}
+                )
+                return open_trade
+            else:
+                # No open trade found, insert as a closed trade for record
+                order = {
+                    "symbol": symbol,
+                    "side": side,
+                    "quantity": quantity,
+                    "category": category,
+                    "timestamp": now,
+                    "open_price": None,
+                    "close_price": close_price,
+                    "close_timestamp": now
+                }
+                trade_collection.insert_one(order)
+                return order
 
     except Exception as e:
         st.error(t(f"Order failed: {e}", f"فشل الطلب: {e}"))
         return None
 
 
+import yfinance as yf
+@st.cache_data(ttl=120)
+def get_yf_symbol(symbol, category):
+    """
+    Map any input symbol/category to a yfinance-compatible ticker.
+    Handles dynamic crypto, forex, commodities, and stocks.
+    """
+    symbol = symbol.upper().replace(" ", "").replace("/", "")
+    if category == "crypto":
+        # Try to split into base/quote, e.g. BTCUSDT, ETHBTC, DOGEUSD, etc.
+        # yfinance supports many as BASE-QUOTE (e.g. BTC-USD, ETH-BTC)
+        if symbol.endswith("USDT"):
+            return symbol.replace("USDT", "-USD")
+        elif symbol.endswith("USD"):
+            return symbol.replace("USD", "-USD")
+        elif len(symbol) > 6:
+            # Try to split base/quote for other pairs (e.g. ETHBTC, LTCETH)
+            # Heuristic: first 3 or 4 chars as base, rest as quote
+            for split in [3, 4]:
+                base, quote = symbol[:split], symbol[split:]
+                # Check if both base and quote are alphabetic and reasonable length
+                if base.isalpha() and quote.isalpha() and 2 <= len(quote) <= 5:
+                    return f"{base}-{quote}"
+            return symbol  # fallback
+        else:
+            return symbol
+    elif category == "forex":
+        # yfinance expects e.g. EURUSD=X, GBPJPY=X, etc.
+        return symbol + "=X"
+    elif category == "commodities":
+        # Try to map common commodities, fallback to symbol=F
+        yf_map = {
+            "GOLD": "GC=F",
+            "SILVER": "SI=F",
+            "OIL": "CL=F",
+            "NATGAS": "NG=F",
+            "COPPER": "HG=F",
+            "PLATINUM": "PL=F",
+            "PALLADIUM": "PA=F",
+            "COCOA": "CC=F",
+            "COFFEE": "KC=F",
+            "CORN": "ZC=F",
+            "SUGAR": "SB=F",
+            "WHEAT": "ZW=F",
+        }
+        return yf_map.get(symbol, symbol + "=F")
+    else:
+        # stocks: use as-is
+        return symbol
+
+def sma_crossover_signal(symbol, short_window=10, long_window=30, category="stocks"):
+    yf_symbol = get_yf_symbol(symbol, category)
+    data = yf.Ticker(yf_symbol).history(period=f"{long_window*3}d", interval="1d")
+    if data.shape[0] < long_window + 1:
+        return False, None  # Not enough data
+
+    data['SMA_short'] = data['Close'].rolling(window=short_window).mean()
+    data['SMA_long'] = data['Close'].rolling(window=long_window).mean()
+
+    prev_short = data['SMA_short'].iloc[-2]
+    prev_long = data['SMA_long'].iloc[-2]
+    curr_short = data['SMA_short'].iloc[-1]
+    curr_long = data['SMA_long'].iloc[-1]
+
+    if prev_short < prev_long and curr_short > curr_long:
+        return True, "BUY"
+    elif prev_short > prev_long and curr_short < curr_long:
+        return True, "SELL"
+    else:
+        return False, None
+
+def momentum_signal(symbol, window=10, threshold=0.01, category="stocks"):
+    yf_symbol = get_yf_symbol(symbol, category)
+    data = yf.Ticker(yf_symbol).history(period=f"{window+1}d", interval="1d")
+    if data.shape[0] < window + 1:
+        return False, None  # Not enough data
+
+    price_now = data['Close'].iloc[-1]
+    price_past = data['Close'].iloc[-(window+1)]
+    momentum = (price_now - price_past) / price_past
+
+    if momentum > threshold:
+        return True, "BUY"
+    elif momentum < -threshold:
+        return True, "SELL"
+    else:
+        return False, None
 # --- Trading decision logic ---
 def should_trade(symbol, category):
     screener = "crypto" if category == "crypto" else "forex" if category == "forex" else "america"
@@ -570,14 +691,14 @@ def trading_bot(status_area):
                     pnl = (current_price - pos["entry_price"]) * qty
                     realized_loss = -pnl if pnl < 0 else 0
                     st.session_state.daily_loss += realized_loss
-                    place_order(symbol, "SELL", qty, category)
+                    place_order(symbol, "SELL", qty, category,price=price,close=True)
                     to_close.append(pos_key)
                 elif current_price >= tp:
                     status_area.text(f"{symbol} ({category}): Take profit hit at {current_price:.2f}. Closing position.")
                     pnl = (current_price - pos["entry_price"]) * qty
                     realized_loss = -pnl if pnl < 0 else 0
                     st.session_state.daily_loss += realized_loss
-                    place_order(symbol, "SELL", qty, category)
+                    place_order(symbol, "SELL", qty, category,price=price,close=True)
                     to_close.append(pos_key)
             elif side == "SELL":
                 if current_price >= sl:
@@ -585,14 +706,14 @@ def trading_bot(status_area):
                     pnl = (pos["entry_price"] - current_price) * qty
                     realized_loss = -pnl if pnl < 0 else 0
                     st.session_state.daily_loss += realized_loss
-                    place_order(symbol, "BUY", qty, category)
+                    place_order(symbol, "BUY", qty, category,price=price,close=False)
                     to_close.append(pos_key)
                 elif current_price <= tp:
                     status_area.text(f"{symbol} ({category}): Take profit hit at {current_price:.2f}. Closing position.")
                     pnl = (pos["entry_price"] - current_price) * qty
                     realized_loss = -pnl if pnl < 0 else 0
                     st.session_state.daily_loss += realized_loss
-                    place_order(symbol, "BUY", qty, category)
+                    place_order(symbol, "BUY", qty, category,price=price,close=False)
                     to_close.append(pos_key)
 
             # --- Target price enforcement ---
@@ -603,14 +724,14 @@ def trading_bot(status_area):
                     pnl = (current_price - pos["entry_price"]) * qty
                     realized_loss = -pnl if pnl < 0 else 0
                     st.session_state.daily_loss += realized_loss
-                    place_order(symbol, "SELL", qty, category)
+                    place_order(symbol, "SELL", qty, category,price=price,close=True)
                     to_close.append(pos_key)
                 elif side == "SELL" and current_price <= target_price:
                     status_area.text(f"{symbol} ({category}): Target price {target_price:.2f} reached at {current_price:.2f}. Closing position.")
                     pnl = (pos["entry_price"] - current_price) * qty
                     realized_loss = -pnl if pnl < 0 else 0
                     st.session_state.daily_loss += realized_loss
-                    place_order(symbol, "BUY", qty, category)
+                    place_order(symbol, "BUY", qty, category,price=price,close=False)
                     to_close.append(pos_key)
 
         # Remove closed positions
@@ -720,14 +841,13 @@ def trading_bot(status_area):
 
                     # --- Place order ---
                     if category == "crypto":
-                        place_order(symbol, signal.upper(), qty, category)
+                     place_order(symbol, signal.upper(), qty, category, price=price)
                     elif category == "stocks":
-                        place_order(symbol, signal.upper(), qty, category)
+                      place_order(symbol, signal.upper(), qty, category, price=price)
                     elif category == "forex":
-                        place_order(epic, signal.upper(), qty, category)
+                      place_order(epic, signal.upper(), qty, category, price=price)
                     elif category == "commodities":
-                        place_order(symbol, signal.upper(), qty, category)
-
+                      place_order(symbol, signal.upper(), qty, category, price=price)
                     # --- Calculate duration for status update ---
                     open_time = now  # Position just opened
                     duration_sec = 0
@@ -809,7 +929,7 @@ if st.button("Stop Trading Bot"):
 # --- Visualization helpers ---
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_historical_prices(symbol, category):
     try:
         if category == "crypto":
@@ -953,23 +1073,34 @@ selected_category = st.selectbox("Show trades for category:", category_options)
 # Normalize category for query
 query = {} if selected_category == "all" else {"category": selected_category.lower()}
 
-# Only fetch needed fields for efficiency
-projection = {"_id": 0, "timestamp": 1, "symbol": 1, "side": 1, "quantity": 1, "category": 1}
+# Fetch needed fields, including open/close price
+projection = {
+    "_id": 0,
+    "timestamp": 1,
+    "symbol": 1,
+    "side": 1,
+    "quantity": 1,
+    "category": 1,
+    "open_price": 1,
+    "close_price": 1
+}
 trades_cursor = db["trade_history"].find(query, projection).sort("timestamp", -1).limit(20)
 trades = list(trades_cursor)
 
 if trades:
     df = pd.DataFrame(trades)
     # Handle missing fields gracefully
-    for col in ["timestamp", "symbol", "side", "quantity"]:
+    for col in ["timestamp", "symbol", "side", "quantity", "open_price", "close_price"]:
         if col not in df:
             df[col] = ""
     df["Timestamp"] = pd.to_datetime(df["timestamp"], unit='s').dt.strftime("%Y-%m-%d %H:%M:%S")
     df["Side"] = df["side"].str.upper()
     df["Quantity"] = df["quantity"]
     df["Symbol"] = df["symbol"]
+    df["Open Price"] = df["open_price"]
+    df["Close Price"] = df["close_price"]
 
-    display_df = df[["Timestamp", "Symbol", "Side", "Quantity"]]
+    display_df = df[["Timestamp", "Symbol", "Side", "Quantity", "Open Price", "Close Price"]]
 
     def highlight_side(val):
         color = 'green' if val == "BUY" else 'red' if val == "SELL" else 'black'
