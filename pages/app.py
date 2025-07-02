@@ -28,6 +28,14 @@ from plotly.subplots import make_subplots
 import yfinance as yf
 from scipy.signal import argrelextrema
 from auth import IGAuthenticator
+from sklearn.ensemble import RandomForestClassifier
+
+if "total_profit" not in st.session_state:
+    st.session_state.total_profit = 0.0
+if "open_positions" not in st.session_state:
+    st.session_state.open_positions = {}
+if "bot_thread" not in st.session_state:
+    st.session_state.bot_thread = None
 
 if not st.session_state.get("logged_in"):
     st.warning("🔐 Please log in first via the Home page.")
@@ -36,6 +44,12 @@ if not st.session_state.get("logged_in"):
 st.title("📊 Main Dashboard")
 st.write(f"Hello, {st.session_state.username}!")
 
+if "ml_model" not in st.session_state:
+    st.session_state.ml_model = RandomForestClassifier()
+    # Dummy fit for demonstration
+    X_demo = np.random.rand(100, 5)
+    y_demo = np.random.randint(0, 2, 100)
+    st.session_state.ml_model.fit(X_demo, y_demo)
 # --- Load environment variables ---
 load_dotenv(".env")
 MONGO_URI = os.getenv("MONGO_URI")
@@ -669,9 +683,64 @@ TRADE_COOLDOWN = st.sidebar.number_input("Trade Cooldown (seconds)", min_value=1
 
 stop_bot = threading.Event()
 
+import joblib
+import numpy as np
+def compute_qty(category, price):
+    try:
+        if category == "crypto":
+            if not client:
+                return 0
+            balance = client.account().get("balances", [])
+            usdt_balance = next((b for b in balance if b.get("asset") == "USDT"), None)
+            if not usdt_balance:
+                return 0
+            trade_usdt = float(usdt_balance["free"]) * TRADE_PERCENT
+            qty = round(trade_usdt / price, 6)
+            return qty
+
+        elif category == "stocks":
+            if not alpaca:
+                return 0
+            account = alpaca.get_account()
+            cash = float(account.cash)
+            trade_cash = cash * TRADE_PERCENT
+            qty = max(1, int(trade_cash / price))
+            return qty
+
+        elif category == "forex":
+            if not igClient:
+                return 0
+            return 1000  # Or dynamic based on your margin settings
+
+        elif category == "commodities":
+            return 1  # Or dynamic based on contract spec
+
+    except Exception as e:
+        print(f"[compute_qty] Error calculating quantity for {category}: {e}")
+    return 0
+
+
+# Load your pre-trained Random Forest model
+try:
+    rf_model = joblib.load("models/random_forest_trader.pkl")
+except Exception as e:
+    print(f"Failed to load Random Forest model: {e}")
+    rf_model = None
+
+def get_rf_features(symbol, category):
+    """
+    Build feature array for Random Forest prediction.
+    For simplicity, let's use: [price, volatility, volume, time].
+    Extend this with your actual engineered features.
+    """
+    price = get_price(symbol) or 0
+    volatility = np.random.uniform(0, 1)  # dummy placeholder, replace with real
+    volume = np.random.uniform(100, 1000)  # dummy placeholder, replace with real
+    hour_of_day = (time.localtime().tm_hour + time.localtime().tm_min / 60.0) / 24.0
+    return np.array([[price, volatility, volume, hour_of_day]])
+
 def trading_bot(status_area):
     while not stop_bot.is_set():
-        # --- Enforce SL/TP/Target for all open positions ---
         to_close = []
         for pos_key, pos in list(st.session_state.open_positions.items()):
             symbol = pos_key.split(":", 1)[1]
@@ -684,202 +753,108 @@ def trading_bot(status_area):
             side = pos["side"]
             qty = pos["qty"]
 
-            # Check SL/TP hit
-            if side == "BUY":
-                if current_price <= sl:
-                    status_area.text(f"{symbol} ({category}): Stop loss hit at {current_price:.2f}. Closing position.")
-                    pnl = (current_price - pos["entry_price"]) * qty
-                    realized_loss = -pnl if pnl < 0 else 0
-                    st.session_state.daily_loss += realized_loss
-                    place_order(symbol, "SELL", qty, category,price=price,close=True)
-                    to_close.append(pos_key)
-                elif current_price >= tp:
-                    status_area.text(f"{symbol} ({category}): Take profit hit at {current_price:.2f}. Closing position.")
-                    pnl = (current_price - pos["entry_price"]) * qty
-                    realized_loss = -pnl if pnl < 0 else 0
-                    st.session_state.daily_loss += realized_loss
-                    place_order(symbol, "SELL", qty, category,price=price,close=True)
-                    to_close.append(pos_key)
-            elif side == "SELL":
-                if current_price >= sl:
-                    status_area.text(f"{symbol} ({category}): Stop loss hit at {current_price:.2f}. Closing position.")
-                    pnl = (pos["entry_price"] - current_price) * qty
-                    realized_loss = -pnl if pnl < 0 else 0
-                    st.session_state.daily_loss += realized_loss
-                    place_order(symbol, "BUY", qty, category,price=price,close=False)
-                    to_close.append(pos_key)
-                elif current_price <= tp:
-                    status_area.text(f"{symbol} ({category}): Take profit hit at {current_price:.2f}. Closing position.")
-                    pnl = (pos["entry_price"] - current_price) * qty
-                    realized_loss = -pnl if pnl < 0 else 0
-                    st.session_state.daily_loss += realized_loss
-                    place_order(symbol, "BUY", qty, category,price=price,close=False)
-                    to_close.append(pos_key)
+            # SL / TP enforcement
+            if side == "BUY" and (current_price <= sl or current_price >= tp):
+                reason = "SL" if current_price <= sl else "TP"
+                pnl = (current_price - pos["entry_price"]) * qty
+                realized_loss = -pnl if pnl < 0 else 0
+                st.session_state.daily_loss += realized_loss
+                place_order(symbol, "SELL", qty, category, price=current_price, close=True)
+                status_area.text(f"{symbol} ({category}): {reason} hit at {current_price:.2f}. Closing.")
+                to_close.append(pos_key)
+            elif side == "SELL" and (current_price >= sl or current_price <= tp):
+                reason = "SL" if current_price >= sl else "TP"
+                pnl = (pos["entry_price"] - current_price) * qty
+                realized_loss = -pnl if pnl < 0 else 0
+                st.session_state.daily_loss += realized_loss
+                place_order(symbol, "BUY", qty, category, price=current_price, close=False)
+                status_area.text(f"{symbol} ({category}): {reason} hit at {current_price:.2f}. Closing.")
+                to_close.append(pos_key)
 
-            # --- Target price enforcement ---
+            # Target price
             target_price = pos.get("target_price", 0.0)
             if target_price > 0:
                 if side == "BUY" and current_price >= target_price:
-                    status_area.text(f"{symbol} ({category}): Target price {target_price:.2f} reached at {current_price:.2f}. Closing position.")
                     pnl = (current_price - pos["entry_price"]) * qty
                     realized_loss = -pnl if pnl < 0 else 0
                     st.session_state.daily_loss += realized_loss
-                    place_order(symbol, "SELL", qty, category,price=price,close=True)
+                    place_order(symbol, "SELL", qty, category, price=current_price, close=True)
+                    status_area.text(f"{symbol} ({category}): Target {target_price:.2f} reached. Closing.")
                     to_close.append(pos_key)
                 elif side == "SELL" and current_price <= target_price:
-                    status_area.text(f"{symbol} ({category}): Target price {target_price:.2f} reached at {current_price:.2f}. Closing position.")
                     pnl = (pos["entry_price"] - current_price) * qty
                     realized_loss = -pnl if pnl < 0 else 0
                     st.session_state.daily_loss += realized_loss
-                    place_order(symbol, "BUY", qty, category,price=price,close=False)
+                    place_order(symbol, "BUY", qty, category, price=current_price, close=False)
+                    status_area.text(f"{symbol} ({category}): Target {target_price:.2f} reached. Closing.")
                     to_close.append(pos_key)
 
-        # Remove closed positions
         for pos_key in to_close:
             del st.session_state.open_positions[pos_key]
 
+        # ============================
+        # === Trading decision loop ===
+        # ============================
         for category, symbols in SYMBOLS.items():
-            if not symbols:
-                status_area.text(f"No symbols found for category {category}, skipping.")
-                continue
-
             for symbol in symbols:
-                try:
-                    if not symbol or not isinstance(symbol, str):
-                        status_area.text(f"Invalid symbol: {symbol} in category {category}, skipping.")
-                        continue
+                now = time.time()
+                pos_key = f"{category}:{symbol}"
+                last_time = st.session_state.last_trade_time.get(pos_key)
+                if last_time and now - last_time < TRADE_COOLDOWN:
+                    continue
 
-                    # --- Trade cooldown logic ---
-                    now = time.time()
-                    pos_key = f"{category}:{symbol}"
-                    last_time = st.session_state.last_trade_time.get(pos_key)
-                    if last_time and now - last_time < TRADE_COOLDOWN:
-                        continue  # skip if within cooldown
+                # --- Original strategy ---
+                do_trade, signal, price = should_trade(symbol, category)
 
-                    do_trade, signal, price = should_trade(symbol, category)
-                    if not do_trade:
-                        continue
-                    if price is None:
-                        status_area.text(f"No price for {symbol}, skipping trade.")
-                        continue
-                    if signal is None or signal.upper() not in {"BUY", "SELL"}:
-                        status_area.text(f"Invalid signal {signal} for {symbol}, skipping.")
-                        continue
+                # --- Random Forest override / assist ---
+                if rf_model and price is not None:
+                    features = get_rf_features(symbol, category)
+                    prediction = rf_model.predict(features)[0]
+                    probas = rf_model.predict_proba(features)[0]
+                    confidence = max(probas)
+                    # If high confidence, override original signal
+                    if confidence > 0.75:
+                        signal = "BUY" if prediction == 1 else "SELL"
+                        do_trade = True
+                        status_area.text(f"RF override for {symbol}: {signal} (conf: {confidence:.2f})")
 
-                    realized_loss = 0
-                    pos = st.session_state.open_positions.get(pos_key)
+                if not do_trade or signal is None:
+                    continue
 
-                    # --- PnL tracking: close previous position if direction changes ---
-                    if pos and pos["side"] != signal.upper():
-                        if pos["side"] == "BUY":
-                            pnl = (price - pos["entry_price"]) * pos["qty"]
-                        else:  # "SELL"
-                            pnl = (pos["entry_price"] - price) * pos["qty"]
-                        realized_loss = -pnl if pnl < 0 else 0  # Only count losses
-                        st.session_state.daily_loss += realized_loss
-                        del st.session_state.open_positions[pos_key]
+                # --- Proceed as before ---
+                qty = compute_qty(category, symbol, price, client, alpaca, igClient)
+                if qty <= 0:
+                    continue
 
-                    # --- Open new position and calculate SL/TP/Target ---
-                    if category == "crypto":
-                        if not client:
-                            status_area.text("Binance client not initialized, skipping crypto trade.")
-                            continue
-                        balance = client.account().get("balances", [])
-                        usdt_balance = next((b for b in balance if b.get("asset") == "USDT"), None)
-                        if not usdt_balance or float(usdt_balance.get("free", 0)) <= 0:
-                            status_area.text(f"No USDT balance available for trading {symbol}")
-                            continue
-                        trade_usdt = float(usdt_balance["free"]) * TRADE_PERCENT
-                        qty = round(trade_usdt / price, 6)
-                        if qty <= 0:
-                            status_area.text(f"Calculated quantity is zero for {symbol}, skipping.")
-                            continue
+                stop_loss_price = price * (1 - STOP_LOSS_PERCENT) if signal == "BUY" else price * (1 + STOP_LOSS_PERCENT)
+                take_profit_price = price * (1 + TAKE_PROFIT_PERCENT) if signal == "BUY" else price * (1 - TAKE_PROFIT_PERCENT)
+                target_key = f"target_{category}_{symbol}"
+                target_price = target_prices.get(target_key, 0.0)
 
-                    elif category == "stocks":
-                        if not alpaca:
-                            status_area.text("Alpaca client not initialized, skipping stock trade.")
-                            continue
-                        account = alpaca.get_account()
-                        cash = float(account.cash)
-                        trade_cash = cash * TRADE_PERCENT
-                        qty = max(1, int(trade_cash / price))
+                st.session_state.open_positions[pos_key] = {
+                    "side": signal,
+                    "entry_price": price,
+                    "qty": qty,
+                    "timestamp": now,
+                    "stop_loss_price": stop_loss_price,
+                    "take_profit_price": take_profit_price,
+                    "target_price": target_price
+                }
 
-                    elif category == "forex":
-                        if not igClient:
-                            status_area.text("IG client not initialized, skipping forex trade.")
-                            continue
-                        normalized_symbol = symbol.upper().replace(" ", "").replace("/", "")
-                        epic = ig_symbol_map.get(normalized_symbol)
-                        if not epic:
-                            status_area.text(f"No IG epic mapping found for forex symbol: {symbol}")
-                            continue
-                        qty = 1000  # Or use your own logic
+                place_order(symbol, signal, qty, category, price=price)
+                status_area.text(
+                    f"Traded {symbol} ({category}): Signal {signal}, Price {price}, "
+                    f"SL {stop_loss_price:.2f}, TP {take_profit_price:.2f}, Target {target_price:.2f}"
+                )
+                st.session_state.last_trade_time[pos_key] = now
 
-                    elif category == "commodities":
-                        qty = 1  # Or your logic for commodity contract size
-
-                    else:
-                        status_area.text(f"Category '{category}' not handled for trading.")
-                        continue
-
-                    # Calculate stop loss and take profit prices (for display/logging)
-                    stop_loss_price = price * (1 - STOP_LOSS_PERCENT) if signal.upper() == "BUY" else price * (1 + STOP_LOSS_PERCENT)
-                    take_profit_price = price * (1 + TAKE_PROFIT_PERCENT) if signal.upper() == "BUY" else price * (1 - TAKE_PROFIT_PERCENT)
-                    target_key = f"target_{category}_{symbol}"
-                    target_price = target_prices.get(target_key, 0.0)
-
-                    # --- Save new open position (including SL/TP and target price) ---
-                    st.session_state.open_positions[pos_key] = {
-                        "side": signal.upper(),
-                        "entry_price": price,
-                        "qty": qty,
-                        "timestamp": now,
-                        "stop_loss_price": stop_loss_price,
-                        "take_profit_price": take_profit_price,
-                        "target_price": target_price
-                    }
-
-                    # --- Place order ---
-                    if category == "crypto":
-                     place_order(symbol, signal.upper(), qty, category, price=price)
-                    elif category == "stocks":
-                      place_order(symbol, signal.upper(), qty, category, price=price)
-                    elif category == "forex":
-                      place_order(epic, signal.upper(), qty, category, price=price)
-                    elif category == "commodities":
-                      place_order(symbol, signal.upper(), qty, category, price=price)
-                    # --- Calculate duration for status update ---
-                    open_time = now  # Position just opened
-                    duration_sec = 0
-                    hours, remainder = divmod(duration_sec, 3600)
-                    minutes, seconds = divmod(remainder, 60)
-                    duration_str = f"{hours}h {minutes}m {seconds}s"
-
-                    # --- Status update ---
-                    status_area.text(
-                        f"Traded {symbol} ({category}): Signal {signal}, Price {price} | "
-                        f"SL: {stop_loss_price:.2f}, TP: {take_profit_price:.2f}, Target: {target_price:.2f}, Duration: {duration_str}, Daily Loss: {st.session_state.daily_loss:.2f}"
-                    )
-
-                    # --- Update cooldown ---
-                    st.session_state.last_trade_time[pos_key] = now
-
-                    # --- Check daily loss limit ---
-                    if st.session_state.daily_loss >= DAILY_LOSS_LIMIT:
-                        status_area.text("Daily loss limit reached. Stopping trading.")
-                        stop_bot.set()
-                        break
-
-                except Exception as e:
-                    status_area.text(f"Error trading {symbol} in {category}: {e}")
-                    db["trade_errors"].insert_one({
-                        "symbol": symbol,
-                        "category": category,
-                        "error": str(e),
-                        "timestamp": time.time()
-                    })
+                if st.session_state.daily_loss >= DAILY_LOSS_LIMIT:
+                    status_area.text("Daily loss limit reached. Stopping.")
+                    stop_bot.set()
+                    break
 
         time.sleep(CHECK_FREQUENCY)
+
 
 # Streamlit app controls
 
@@ -1064,16 +1039,20 @@ def show_all_symbols_visuals():
 # ...existing code...
 show_all_symbols_visuals()
 
+import pandas as pd
+
 st.header(t("Recent Trades", "الصفقات الأخيرة"))
 
-# Add a category filter for trades
+# Category filter
 category_options = ["all", "crypto", "stocks", "forex", "commodities"]
-selected_category = st.selectbox("Show trades for category:", category_options)
+selected_category = st.selectbox(t("Show trades for category:", "عرض الصفقات حسب الفئة:"), category_options)
 
-# Normalize category for query
-query = {} if selected_category == "all" else {"category": selected_category.lower()}
+# Build query
+query = {"user_id": st.session_state.user_id}
+if selected_category != "all":
+    query["category"] = selected_category.lower()
 
-# Fetch needed fields, including open/close price
+# Projection
 projection = {
     "_id": 0,
     "timestamp": 1,
@@ -1084,15 +1063,23 @@ projection = {
     "open_price": 1,
     "close_price": 1
 }
-trades_cursor = db["trade_history"].find(query, projection).sort("timestamp", -1).limit(20)
-trades = list(trades_cursor)
+
+try:
+    trades_cursor = db["trade_history"].find(query, projection).sort("timestamp", -1).limit(20)
+    trades = list(trades_cursor)
+except Exception as e:
+    st.error(f"Database error: {e}")
+    trades = []
 
 if trades:
     df = pd.DataFrame(trades)
-    # Handle missing fields gracefully
+
+    # Ensure columns
     for col in ["timestamp", "symbol", "side", "quantity", "open_price", "close_price"]:
-        if col not in df:
+        if col not in df.columns:
             df[col] = ""
+
+    # Compute timestamp and side
     df["Timestamp"] = pd.to_datetime(df["timestamp"], unit='s').dt.strftime("%Y-%m-%d %H:%M:%S")
     df["Side"] = df["side"].str.upper()
     df["Quantity"] = df["quantity"]
@@ -1100,17 +1087,42 @@ if trades:
     df["Open Price"] = df["open_price"]
     df["Close Price"] = df["close_price"]
 
-    display_df = df[["Timestamp", "Symbol", "Side", "Quantity", "Open Price", "Close Price"]]
+    # Compute profit
+    def calc_profit(row):
+        try:
+            qty = float(row["Quantity"])
+            open_p = float(row["Open Price"])
+            close_p = float(row["Close Price"])
+            if row["Side"] == "BUY":
+                return (close_p - open_p) * qty
+            elif row["Side"] == "SELL":
+                return (open_p - close_p) * qty
+        except:
+            return 0.0
+    df["Profit"] = df.apply(calc_profit, axis=1)
 
+    display_df = df[["Timestamp", "Symbol", "Side", "Quantity", "Open Price", "Close Price", "Profit"]]
+
+    # Highlight both side & profit
     def highlight_side(val):
         color = 'green' if val == "BUY" else 'red' if val == "SELL" else 'black'
         return f'color: {color}; font-weight: bold'
+    
+    def highlight_profit(val):
+        try:
+            color = 'green' if val > 0 else 'red' if val < 0 else 'black'
+            return f'color: {color}; font-weight: bold'
+        except:
+            return ''
+    
+    styled_df = display_df.style \
+        .map(highlight_side, subset=["Side"]) \
+        .map(highlight_profit, subset=["Profit"])
 
-    styled_df = display_df.style.map(highlight_side, subset=["Side"])
     st.dataframe(styled_df, use_container_width=True)
+
 else:
     st.info(t("No trades available.", "لا توجد صفقات متاحة."))
 
-# Footer 
-
+# Footer
 st.write(t("IRAM-B :: Adam Elnaba", "تم التطوير بواسطة IRAM-B"))
