@@ -460,6 +460,7 @@ def place_order(symbol, side, quantity, category, price=None, close=False):
             open_price = price
             close_price = None
             order = {
+                "user_id": st.session_state.user_id,
                 "symbol": symbol,
                 "side": side,
                 "quantity": quantity,
