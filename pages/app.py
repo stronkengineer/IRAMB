@@ -29,7 +29,8 @@ import yfinance as yf
 from scipy.signal import argrelextrema
 from auth import IGAuthenticator
 from sklearn.ensemble import RandomForestClassifier
-
+if "user_id" not in st.session_state:
+    st.session_state.user_id = "guest_user"
 if "total_profit" not in st.session_state:
     st.session_state.total_profit = 0.0
 if "open_positions" not in st.session_state:
@@ -41,8 +42,7 @@ if not st.session_state.get("logged_in"):
     st.warning("🔐 Please log in first via the Home page.")
     st.stop()
 
-    if "user_id" not in st.session_state:
-     st.session_state.user_id = None
+ 
 
 
 st.title("📊 Main Dashboard")
