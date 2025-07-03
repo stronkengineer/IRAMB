@@ -41,6 +41,10 @@ if not st.session_state.get("logged_in"):
     st.warning("🔐 Please log in first via the Home page.")
     st.stop()
 
+    if "user_id" not in st.session_state:
+     st.session_state.user_id = None
+
+
 st.title("📊 Main Dashboard")
 st.write(f"Hello, {st.session_state.username}!")
 
