@@ -1052,8 +1052,8 @@ st.header(t("Recent Trades", "الصفقات الأخيرة"))
 category_options = ["all", "crypto", "stocks", "forex", "commodities"]
 selected_category = st.selectbox(t("Show trades for category:", "عرض الصفقات حسب الفئة:"), category_options)
 
-# Build query
-query = {"user_id": st.session_state.user_id}
+# Build query without user_id
+query = {}
 if selected_category != "all":
     query["category"] = selected_category.lower()
 
@@ -1079,12 +1079,10 @@ except Exception as e:
 if trades:
     df = pd.DataFrame(trades)
 
-    # Ensure columns
     for col in ["timestamp", "symbol", "side", "quantity", "open_price", "close_price"]:
         if col not in df.columns:
             df[col] = ""
 
-    # Compute timestamp and side
     df["Timestamp"] = pd.to_datetime(df["timestamp"], unit='s').dt.strftime("%Y-%m-%d %H:%M:%S")
     df["Side"] = df["side"].str.upper()
     df["Quantity"] = df["quantity"]
