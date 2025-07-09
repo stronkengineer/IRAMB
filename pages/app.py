@@ -67,7 +67,7 @@ NEWSAPI_KEY = os.getenv("NEWSAPI_KEY") or "pub_877205437754424e9f9b6279373344598
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client[DB_NAME]
 user_collection = db["user_credentials"]
-trade_collection = db["trade_history"]
+trade_collection = db["trade"]
 
 # --- Alpaca client ---
 alpaca = None
