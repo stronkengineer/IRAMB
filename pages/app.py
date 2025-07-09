@@ -27,7 +27,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import yfinance as yf
 from scipy.signal import argrelextrema
-from auth import IGAuthenticator
+from ig_auth import IGAuthenticator
 from sklearn.ensemble import RandomForestClassifier
 if "user_id" not in st.session_state:
     st.session_state.user_id = "guest_user"
