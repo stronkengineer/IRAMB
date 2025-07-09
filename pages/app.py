@@ -1081,7 +1081,7 @@ projection = {
 }
 
 try:
-    trades_cursor = db["trade_summary"].find({}, projection).sort("last_updated", -1).limit(20)
+    trades_cursor = db["trade"].find({}, projection).sort("last_updated", -1).limit(20)
     snapshots = list(trades_cursor)
 except Exception as e:
     st.error(f"Database error: {e}")
