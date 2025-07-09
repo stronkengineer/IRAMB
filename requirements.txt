@@ -17,4 +17,4 @@ python-binance
 cryptography>=38.0.0
 sklearn
 scikit-learn
-
+joblib
