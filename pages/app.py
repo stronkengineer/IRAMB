@@ -187,12 +187,11 @@ TAKE_PROFIT_PERCENT = st.sidebar.slider("Take Profit %", 1, 20, 5) / 100  # Adde
 
 
 ALGO_OPTIONS = [
-    "SMA Crossover",
-    "RSI",
-    "Momentum",
-    "TradingView Only",
-    "Hybrid (TV + RSI)"
+    "Order Imbalance (Closes vs High/Low)",
+    "Microstructure Momentum (1m)",
+    "VWAP Deviation"
 ]
+
 selected_algo = st.sidebar.selectbox("Select Trading Algorithm", ALGO_OPTIONS)
 
 # --- Language toggle ---
@@ -584,43 +583,59 @@ def get_yf_symbol(symbol, category):
         # stocks: use as-is
         return symbol
 
-def sma_crossover_signal(symbol, short_window=10, long_window=30, category="stocks"):
-    yf_symbol = get_yf_symbol(symbol, category)
-    data = yf.Ticker(yf_symbol).history(period=f"{long_window*3}d", interval="1d")
-    if data.shape[0] < long_window + 1:
-        return False, None  # Not enough data
-
-    data['SMA_short'] = data['Close'].rolling(window=short_window).mean()
-    data['SMA_long'] = data['Close'].rolling(window=long_window).mean()
-
-    prev_short = data['SMA_short'].iloc[-2]
-    prev_long = data['SMA_long'].iloc[-2]
-    curr_short = data['SMA_short'].iloc[-1]
-    curr_long = data['SMA_long'].iloc[-1]
-
-    if prev_short < prev_long and curr_short > curr_long:
-        return True, "BUY"
-    elif prev_short > prev_long and curr_short < curr_long:
-        return True, "SELL"
-    else:
-        return False, None
-
-def momentum_signal(symbol, window=10, threshold=0.01, category="stocks"):
+def order_imbalance_signal(symbol, window=10, threshold=0.6, category="stocks"):
     yf_symbol = get_yf_symbol(symbol, category)
     data = yf.Ticker(yf_symbol).history(period=f"{window+1}d", interval="1d")
-    if data.shape[0] < window + 1:
-        return False, None  # Not enough data
+    if data.shape[0] < window:
+        return False, None
 
-    price_now = data['Close'].iloc[-1]
-    price_past = data['Close'].iloc[-(window+1)]
-    momentum = (price_now - price_past) / price_past
+    closes_near_high = (data['Close'] > (data['High'] - 0.2*(data['High'] - data['Low']))).sum()
+    closes_near_low = (data['Close'] < (data['Low'] + 0.2*(data['High'] - data['Low']))).sum()
 
-    if momentum > threshold:
+    if closes_near_high / window > threshold:
         return True, "BUY"
-    elif momentum < -threshold:
+    elif closes_near_low / window > threshold:
         return True, "SELL"
     else:
         return False, None
+
+def micro_momentum_signal(symbol, lookback=10, min_moves=7, category="stocks"):
+    yf_symbol = get_yf_symbol(symbol, category)
+    data = yf.Ticker(yf_symbol).history(period="1d", interval="1m")
+    if data.shape[0] < lookback + 1:
+        return False, None
+
+    closes = data['Close'][-(lookback+1):].values
+    up_moves = sum(1 for i in range(1, len(closes)) if closes[i] > closes[i-1])
+    down_moves = sum(1 for i in range(1, len(closes)) if closes[i] < closes[i-1])
+
+    if up_moves >= min_moves:
+        return True, "BUY"
+    elif down_moves >= min_moves:
+        return True, "SELL"
+    else:
+        return False, None
+    
+def vwap_signal(symbol, window=20, deviation=0.01, category="stocks"):
+     yf_symbol = get_yf_symbol(symbol, category)
+     data = yf.Ticker(yf_symbol).history(period=f"{window*2}d", interval="1d")
+     if data.shape[0] < window:
+        return False, None
+
+     typical_price = (data['High'] + data['Low'] + data['Close']) / 3
+     vwap = (typical_price * data['Volume']).rolling(window=window).sum() / data['Volume'].rolling(window=window).sum()
+     vwap_now = vwap.iloc[-1]
+     price_now = data['Close'].iloc[-1]
+
+     if price_now > vwap_now * (1 + deviation):
+         return True, "SELL"
+     elif price_now < vwap_now * (1 - deviation):
+        return True, "BUY"
+     else:
+        return False, None
+
+
+
 # --- Trading decision logic ---
 def should_trade(symbol, category):
     screener = "crypto" if category == "crypto" else "forex" if category == "forex" else "america"
@@ -1060,72 +1075,48 @@ if selected_category != "all":
 # Projection
 projection = {
     "_id": 0,
-    "timestamp": 1,
-    "symbol": 1,
-    "side": 1,
-    "quantity": 1,
-    "category": 1,
-    "open_price": 1,
-    "close_price": 1
+    "last_updated": 1,
+    "live_profit": 1,
+    "current_inventory": 1
 }
 
 try:
-    trades_cursor = db["trade_history"].find(query, projection).sort("timestamp", -1).limit(20)
-    trades = list(trades_cursor)
+    trades_cursor = db["trade_summary"].find({}, projection).sort("last_updated", -1).limit(20)
+    snapshots = list(trades_cursor)
 except Exception as e:
     st.error(f"Database error: {e}")
-    trades = []
+    snapshots = []
 
-if trades:
-    df = pd.DataFrame(trades)
+if snapshots:
+    # Convert to DataFrame
+    data = []
+    for snap in snapshots:
+        ts = snap.get("last_updated", 0)
+        profit = snap.get("live_profit", 0)
+        inventory = snap.get("current_inventory", {})
+        inventory_str = ", ".join([f"{k}: {v:.4f}" for k,v in inventory.items()])
+        data.append({
+            "Timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)),
+            "Live Profit": profit,
+            "Inventory": inventory_str
+        })
 
-    for col in ["timestamp", "symbol", "side", "quantity", "open_price", "close_price"]:
-        if col not in df.columns:
-            df[col] = ""
+    df = pd.DataFrame(data)
 
-    df["Timestamp"] = pd.to_datetime(df["timestamp"], unit='s').dt.strftime("%Y-%m-%d %H:%M:%S")
-    df["Side"] = df["side"].str.upper()
-    df["Quantity"] = df["quantity"]
-    df["Symbol"] = df["symbol"]
-    df["Open Price"] = df["open_price"]
-    df["Close Price"] = df["close_price"]
-
-    # Compute profit
-    def calc_profit(row):
-        try:
-            qty = float(row["Quantity"])
-            open_p = float(row["Open Price"])
-            close_p = float(row["Close Price"])
-            if row["Side"] == "BUY":
-                return (close_p - open_p) * qty
-            elif row["Side"] == "SELL":
-                return (open_p - close_p) * qty
-        except:
-            return 0.0
-    df["Profit"] = df.apply(calc_profit, axis=1)
-
-    display_df = df[["Timestamp", "Symbol", "Side", "Quantity", "Open Price", "Close Price", "Profit"]]
-
-    # Highlight both side & profit
-    def highlight_side(val):
-        color = 'green' if val == "BUY" else 'red' if val == "SELL" else 'black'
-        return f'color: {color}; font-weight: bold'
-    
+    # Highlight live profit
     def highlight_profit(val):
         try:
             color = 'green' if val > 0 else 'red' if val < 0 else 'black'
             return f'color: {color}; font-weight: bold'
         except:
             return ''
-    
-    styled_df = display_df.style \
-        .map(highlight_side, subset=["Side"]) \
-        .map(highlight_profit, subset=["Profit"])
+
+    styled_df = df.style.map(highlight_profit, subset=["Live Profit"])
 
     st.dataframe(styled_df, use_container_width=True)
 
 else:
-    st.info(t("No trades available.", "لا توجد صفقات متاحة."))
+    st.info(t("No portfolio snapshots available.", "لا توجد ملخصات متاحة."))
 
 # Footer
 st.write(t("IRAM-B :: Adam Elnaba", "تم التطوير بواسطة IRAM-B"))
