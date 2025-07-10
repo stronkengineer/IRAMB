@@ -740,7 +740,11 @@ def compute_qty(category, price):
 # Load your pre-trained Random Forest model
 
 
-def trading_bot(status_area, log_area):
+import time
+import streamlit as st
+
+def trading_bot():
+    # Defensive session state setup
     if "open_positions" not in st.session_state:
         st.session_state.open_positions = {}
     if "daily_loss" not in st.session_state:
@@ -752,20 +756,24 @@ def trading_bot(status_area, log_area):
 
     while not stop_bot.is_set():
         to_close = []
+
+        # === Manage open positions ===
         for pos_key, pos in list(st.session_state.open_positions.items()):
             symbol = pos_key.split(":", 1)[1]
             category = pos_key.split(":", 1)[0]
             current_price = get_price(symbol)
             if current_price is None:
                 continue
+
             sl = pos.get("stop_loss_price")
             tp = pos.get("take_profit_price")
             side = pos["side"]
             qty = pos["qty"]
 
-            # SL / TP enforcement
             close_trade = False
             reason = None
+
+            # Stop Loss / Take Profit enforcement
             if side == "BUY" and (current_price <= sl or current_price >= tp):
                 reason = "SL" if current_price <= sl else "TP"
                 close_trade = True
@@ -777,6 +785,7 @@ def trading_bot(status_area, log_area):
                 pnl = (current_price - pos["entry_price"]) * qty if side == "BUY" else (pos["entry_price"] - current_price) * qty
                 realized_loss = -pnl if pnl < 0 else 0
                 st.session_state.daily_loss += realized_loss
+
                 place_order(symbol, "SELL" if side == "BUY" else "BUY", qty, category, price=current_price, close=True)
 
                 trade_collection.insert_one({
@@ -790,10 +799,12 @@ def trading_bot(status_area, log_area):
                 })
 
                 st.session_state.bot_logs.append(
-                    f"{symbol} ({category}): {reason} hit at {current_price:.2f}. PnL: {pnl:.2f}. Closing."
+                    f"{time.strftime('%H:%M:%S')} - {symbol} ({category}): {reason} hit at {current_price:.2f}, "
+                    f"PnL: {pnl:.2f}. Position closed."
                 )
                 to_close.append(pos_key)
 
+            # Optional: target price trigger
             target_price = pos.get("target_price", 0.0)
             if target_price > 0:
                 hit_target = (side == "BUY" and current_price >= target_price) or (side == "SELL" and current_price <= target_price)
@@ -801,6 +812,7 @@ def trading_bot(status_area, log_area):
                     pnl = (current_price - pos["entry_price"]) * qty if side == "BUY" else (pos["entry_price"] - current_price) * qty
                     realized_loss = -pnl if pnl < 0 else 0
                     st.session_state.daily_loss += realized_loss
+
                     place_order(symbol, "SELL" if side == "BUY" else "BUY", qty, category, price=current_price, close=True)
 
                     trade_collection.insert_one({
@@ -814,19 +826,21 @@ def trading_bot(status_area, log_area):
                     })
 
                     st.session_state.bot_logs.append(
-                        f"{symbol} ({category}): Target {target_price:.2f} reached. PnL: {pnl:.2f}. Closing."
+                        f"{time.strftime('%H:%M:%S')} - {symbol} ({category}): Target {target_price:.2f} reached, "
+                        f"PnL: {pnl:.2f}. Position closed."
                     )
                     to_close.append(pos_key)
 
         for pos_key in to_close:
             del st.session_state.open_positions[pos_key]
 
-        # === Trading decision loop ===
+        # === Make new trading decisions ===
         for category, symbols in SYMBOLS.items():
             for symbol in symbols:
                 now = time.time()
                 pos_key = f"{category}:{symbol}"
                 last_time = st.session_state.last_trade_time.get(pos_key)
+
                 if last_time and now - last_time < TRADE_COOLDOWN:
                     continue
 
@@ -854,22 +868,20 @@ def trading_bot(status_area, log_area):
                 }
 
                 place_order(symbol, signal, qty, category, price=price)
+
                 st.session_state.bot_logs.append(
-                    f"Traded {symbol} ({category}): Signal {signal}, Price {price:.2f}, "
-                    f"SL {stop_loss_price:.2f}, TP {take_profit_price:.2f}, Target {target_price:.2f}"
+                    f"{time.strftime('%H:%M:%S')} - New trade on {symbol} ({category}): "
+                    f"{signal} @ {price:.2f}, SL {stop_loss_price:.2f}, TP {take_profit_price:.2f}, Target {target_price:.2f}"
                 )
+
                 st.session_state.last_trade_time[pos_key] = now
 
                 if st.session_state.daily_loss >= DAILY_LOSS_LIMIT:
-                    st.session_state.bot_logs.append("Daily loss limit reached. Stopping bot.")
+                    st.session_state.bot_logs.append(
+                        f"{time.strftime('%H:%M:%S')} - 🚨 Daily loss limit reached (${DAILY_LOSS_LIMIT:.2f}). Stopping bot."
+                    )
                     stop_bot.set()
                     break
-
-        # === Live display ===
-        status_area.text(f"Trading loop active. Positions open: {len(st.session_state.open_positions)}")
-        # Show last 20 logs
-        log_text = "\n".join(st.session_state.bot_logs[-20:])
-        log_area.text(log_text)
 
         time.sleep(CHECK_FREQUENCY)
 
@@ -905,11 +917,17 @@ log_area = st.empty()
 if st.button("Start Trading Bot"):
     if st.session_state.bot_thread is None or not st.session_state.bot_thread.is_alive():
         stop_bot.clear()
-        st.session_state.bot_thread = threading.Thread(target=trading_bot, args=(status_area, log_area), daemon=True)
+        st.session_state.bot_thread = threading.Thread(target=trading_bot, daemon=True)
         st.session_state.bot_thread.start()
         status_area.text("Trading bot started.")
     else:
         status_area.text("Trading bot is already running.")
+
+# Live updater
+status_area.text(f"Positions open: {len(st.session_state.open_positions)} | "
+                 f"Daily loss: ${st.session_state.daily_loss:.2f}")
+
+log_area.text("\n".join(st.session_state.bot_logs[-20:]))
 
 
 if st.button("Stop Trading Bot"):
