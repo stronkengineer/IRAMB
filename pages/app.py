@@ -29,13 +29,15 @@ import yfinance as yf
 from scipy.signal import argrelextrema
 from ig_auth import IGAuthenticator
 from sklearn.ensemble import RandomForestClassifier
-if "user_id" not in st.session_state:
-    st.session_state.user_id = "guest_user"
-if "total_profit" not in st.session_state:
-    st.session_state.total_profit = 0.0
+if "bot_logs" not in st.session_state:
+    st.session_state.bot_logs = []
+if "open_positions" not in st.session_state:
+    st.session_state.open_positions = {}
+if "daily_loss" not in st.session_state:
+    st.session_state.daily_loss = 0
+if "last_trade_time" not in st.session_state:
+    st.session_state.last_trade_time = {}
 
-if "bot_thread" not in st.session_state:
-    st.session_state.bot_thread = None
 
 if not st.session_state.get("logged_in"):
     st.warning("🔐 Please log in first via the Home page.")
