@@ -740,8 +740,7 @@ def compute_qty(category, price):
 # Load your pre-trained Random Forest model
 
 
-def trading_bot():
-    # Defensive session state setup
+def trading_bot(status_area, log_area):
     if "open_positions" not in st.session_state:
         st.session_state.open_positions = {}
     if "daily_loss" not in st.session_state:
@@ -780,7 +779,6 @@ def trading_bot():
                 st.session_state.daily_loss += realized_loss
                 place_order(symbol, "SELL" if side == "BUY" else "BUY", qty, category, price=current_price, close=True)
 
-                # Save PnL to DB
                 trade_collection.insert_one({
                     "symbol": symbol,
                     "category": category,
@@ -795,9 +793,7 @@ def trading_bot():
                     f"{symbol} ({category}): {reason} hit at {current_price:.2f}. PnL: {pnl:.2f}. Closing."
                 )
                 to_close.append(pos_key)
-                continue
 
-            # Target price enforcement
             target_price = pos.get("target_price", 0.0)
             if target_price > 0:
                 hit_target = (side == "BUY" and current_price >= target_price) or (side == "SELL" and current_price <= target_price)
@@ -869,7 +865,14 @@ def trading_bot():
                     stop_bot.set()
                     break
 
+        # === Live display ===
+        status_area.text(f"Trading loop active. Positions open: {len(st.session_state.open_positions)}")
+        # Show last 20 logs
+        log_text = "\n".join(st.session_state.bot_logs[-20:])
+        log_area.text(log_text)
+
         time.sleep(CHECK_FREQUENCY)
+
 
 
 
@@ -897,15 +900,17 @@ for pos_key, pos in st.session_state.open_positions.items():
 st.title("Automated Trading Bot")
 
 status_area = st.empty()
+log_area = st.empty()
 
 if st.button("Start Trading Bot"):
     if st.session_state.bot_thread is None or not st.session_state.bot_thread.is_alive():
         stop_bot.clear()
-        st.session_state.bot_thread = threading.Thread(target=trading_bot, args=(status_area,), daemon=True)
+        st.session_state.bot_thread = threading.Thread(target=trading_bot, args=(status_area, log_area), daemon=True)
         st.session_state.bot_thread.start()
         status_area.text("Trading bot started.")
     else:
         status_area.text("Trading bot is already running.")
+
 
 if st.button("Stop Trading Bot"):
     if st.session_state.bot_thread and st.session_state.bot_thread.is_alive():
