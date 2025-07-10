@@ -740,14 +740,16 @@ def compute_qty(category, price):
 # Load your pre-trained Random Forest model
 
 
-def trading_bot(status_area):
-    # Defensive: always ensure session_state keys exist
+def trading_bot():
+    # Defensive session state setup
     if "open_positions" not in st.session_state:
         st.session_state.open_positions = {}
     if "daily_loss" not in st.session_state:
         st.session_state.daily_loss = 0
     if "last_trade_time" not in st.session_state:
         st.session_state.last_trade_time = {}
+    if "bot_logs" not in st.session_state:
+        st.session_state.bot_logs = []
 
     while not stop_bot.is_set():
         to_close = []
@@ -789,7 +791,9 @@ def trading_bot(status_area):
                     "timestamp": time.time()
                 })
 
-                status_area.text(f"{symbol} ({category}): {reason} hit at {current_price:.2f}. PnL: {pnl:.2f}. Closing.")
+                st.session_state.bot_logs.append(
+                    f"{symbol} ({category}): {reason} hit at {current_price:.2f}. PnL: {pnl:.2f}. Closing."
+                )
                 to_close.append(pos_key)
                 continue
 
@@ -803,7 +807,6 @@ def trading_bot(status_area):
                     st.session_state.daily_loss += realized_loss
                     place_order(symbol, "SELL" if side == "BUY" else "BUY", qty, category, price=current_price, close=True)
 
-                    # Save PnL to DB
                     trade_collection.insert_one({
                         "symbol": symbol,
                         "category": category,
@@ -814,7 +817,9 @@ def trading_bot(status_area):
                         "timestamp": time.time()
                     })
 
-                    status_area.text(f"{symbol} ({category}): Target {target_price:.2f} reached. PnL: {pnl:.2f}. Closing.")
+                    st.session_state.bot_logs.append(
+                        f"{symbol} ({category}): Target {target_price:.2f} reached. PnL: {pnl:.2f}. Closing."
+                    )
                     to_close.append(pos_key)
 
         for pos_key in to_close:
@@ -830,9 +835,6 @@ def trading_bot(status_area):
                     continue
 
                 do_trade, signal, price = should_trade(symbol, category)
-
-                # Removed ML override (rf_model) here
-
                 if not do_trade or signal is None:
                     continue
 
@@ -856,14 +858,14 @@ def trading_bot(status_area):
                 }
 
                 place_order(symbol, signal, qty, category, price=price)
-                status_area.text(
+                st.session_state.bot_logs.append(
                     f"Traded {symbol} ({category}): Signal {signal}, Price {price:.2f}, "
                     f"SL {stop_loss_price:.2f}, TP {take_profit_price:.2f}, Target {target_price:.2f}"
                 )
                 st.session_state.last_trade_time[pos_key] = now
 
                 if st.session_state.daily_loss >= DAILY_LOSS_LIMIT:
-                    status_area.text("Daily loss limit reached. Stopping.")
+                    st.session_state.bot_logs.append("Daily loss limit reached. Stopping bot.")
                     stop_bot.set()
                     break
 
