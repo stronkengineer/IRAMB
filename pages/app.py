@@ -37,6 +37,8 @@ if "daily_loss" not in st.session_state:
     st.session_state.daily_loss = 0
 if "last_trade_time" not in st.session_state:
     st.session_state.last_trade_time = {}
+if "bot_thread" not in st.session_state:
+    st.session_state.bot_thread = None
 
 
 if not st.session_state.get("logged_in"):
